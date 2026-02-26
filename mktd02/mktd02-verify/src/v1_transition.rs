@@ -50,8 +50,8 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
     };
 
     let canister_bytes = canister_id.as_slice();
-    let timestamp_bytes = receipt.timestamp.to_le_bytes();
-    let nonce_bytes = receipt.nonce.to_le_bytes();
+    let timestamp_bytes = receipt.timestamp.to_be_bytes();
+    let nonce_bytes = receipt.nonce.to_be_bytes();
 
     // TOMBSTONE_CONSTANT = SHA-256("MKTD_TOMBSTONE_V1")
     let tombstone_constant = sha256(TOMBSTONE_SEED);
