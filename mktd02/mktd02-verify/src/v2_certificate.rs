@@ -1,5 +1,6 @@
 use candid::Principal;
 use ic_agent::Agent;
+use ic_agent::hash_tree::{Label, LookupResult};
 use crate::fetch::Receipt;
 
 pub struct V2Result {
@@ -30,10 +31,10 @@ pub async fn verify(
 
     // Read certified_data via read_state with explicit path construction.
     // ic-agent verifies the BLS certificate chain automatically.
-    let paths: Vec<Vec<Vec<u8>>> = vec![vec![
-        b"canister".to_vec(),
-        canister_id.as_slice().to_vec(),
-        b"certified_data".to_vec(),
+    let paths: Vec<Vec<Label<Vec<u8>>>> = vec![vec![
+        Label::from(b"canister".to_vec()),
+        Label::from(canister_id.as_slice().to_vec()),
+        Label::from(b"certified_data".to_vec()),
     ]];
 
     let certificate = match agent.read_state_raw(paths, canister_id).await {
@@ -47,15 +48,14 @@ pub async fn verify(
     };
 
     // Look up certified_data in the verified certificate's hash tree
-    use ic_agent::agent::status::Status;
-    let path: Vec<&[u8]> = vec![
-        b"canister",
-        canister_id.as_slice(),
-        b"certified_data",
+    let path: Vec<Label<&[u8]>> = vec![
+        Label::from("canister".as_bytes()),
+        Label::from(canister_id.as_slice()),
+        Label::from("certified_data".as_bytes()),
     ];
 
     match certificate.tree.lookup_path(&path) {
-        ic_agent::hash_tree::LookupResult::Found(data) => {
+        LookupResult::Found(data) => {
             if data.len() != 32 {
                 return V2Result {
                     passed: false,
@@ -76,7 +76,7 @@ pub async fn verify(
                 }
             }
         }
-        ic_agent::hash_tree::LookupResult::Absent => {
+        LookupResult::Absent => {
             V2Result {
                 passed: false,
                 detail: "certified_data absent from state tree".to_string(),
