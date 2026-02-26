@@ -36,12 +36,7 @@ pub async fn verify(
     canister_id: Principal,
     receipt: &Receipt,
 ) -> V4Result {
-    let post_state = match Receipt::hash_field(&receipt.post_state_hash, "post_state_hash") {
-        Ok(h) => h,
-        Err(e) => return V4Result {
-            tombstone_ok: false, state_hash_ok: false, detail: e.to_string(),
-        },
-    };
+    let post_state = receipt.post_state_hash;
 
     // Check tombstone status
     let tombstone = match query_tombstone_status(agent, canister_id).await {
