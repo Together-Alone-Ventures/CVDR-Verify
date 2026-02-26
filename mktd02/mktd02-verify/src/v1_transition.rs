@@ -101,10 +101,10 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
         ));
     }
 
-    // 4. receipt_id
+    // 4. receipt_id = hash_with_tag(TAG_RECEIPT, canister_id || nonce)
+    // Note: no timestamp — matches zombie_core::receipt::compute_receipt_id()
     let expected_id = hash_with_tag(TAG_RECEIPT, &[
         canister_bytes,
-        &timestamp_bytes,
         &nonce_bytes,
     ]);
     result.receipt_id_ok = receipt.receipt_id == expected_id;
