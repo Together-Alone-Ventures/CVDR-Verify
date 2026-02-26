@@ -23,6 +23,7 @@ pub struct RawReceipt {
 }
 
 /// Parsed receipt with hash fields as byte arrays
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Receipt {
     pub receipt_id: [u8; 32],
