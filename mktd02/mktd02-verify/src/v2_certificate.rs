@@ -83,4 +83,10 @@ pub async fn verify(
     // 1. Parse CBOR certificate
     // 2. Verify BLS signature against subnet public key via NNS root
     // 3. Look up canister/<id>/certified_data in the hash tree
-    // 4. Compare
+    // 4. Compare against receipt.certified_commitment
+
+    V2Result {
+        passed: false,
+        detail: "Certificate present but BLS verification not yet implemented. Certificate parsing requires version-specific ic-agent API integration.".to_string(),
+    }
+}
