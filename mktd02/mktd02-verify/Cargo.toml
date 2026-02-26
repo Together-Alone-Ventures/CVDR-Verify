@@ -1,0 +1,16 @@
+[package]
+name = "mktd02-verify"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone V1-V4 verification tool for MKTd02 CVDRs"
+
+[dependencies]
+zombie-core = { git = "https://github.com/Together-Alone-Ventures/MKTd02.git", package = "zombie-core" }
+ic-agent = "0.39"
+candid = "0.10"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
