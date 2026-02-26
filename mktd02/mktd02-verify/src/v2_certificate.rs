@@ -1,7 +1,13 @@
-use candid::Principal;
+use candid::{CandidType, Decode, Encode, Principal};
 use ic_agent::Agent;
-use ic_agent::hash_tree::{Label, LookupResult};
+use serde::Deserialize;
 use crate::fetch::Receipt;
+
+#[derive(Debug, CandidType, Deserialize)]
+struct StateHashCertified {
+    pub certificate: Option<serde_bytes::ByteBuf>,
+    pub hash: serde_bytes::ByteBuf,
+}
 
 pub struct V2Result {
     pub passed: bool,
@@ -29,64 +35,104 @@ pub async fn verify(
 ) -> V2Result {
     let expected = receipt.certified_commitment;
 
-    // Read certified_data via read_state with explicit path construction.
-    // ic-agent verifies the BLS certificate chain automatically.
-    let paths: Vec<Vec<Label<Vec<u8>>>> = vec![vec![
-        Label::from(b"canister".to_vec()),
-        Label::from(canister_id.as_slice().to_vec()),
-        Label::from(b"certified_data".to_vec()),
-    ]];
+    // V2 requires a certified query response containing an ICP certificate.
+    // The canister's mktd_get_state_hash endpoint should return a certificate
+    // (from ic0.data_certificate()) when called as a certified query.
+    // 
+    // Note: Anonymous queries may not receive certificates on all subnets.
+    // If the certificate is null, V2 cannot be completed.
 
-    let certificate = match agent.read_state_raw(paths, canister_id).await {
-        Ok(cert) => cert,
-        Err(e) => {
-            return V2Result {
-                passed: false,
-                detail: format!("read_state failed: {}. V2 requires the canister to have set certified data via ic0.certified_data_set().", e),
-            };
-        }
+    let arg = match Encode!() {
+        Ok(a) => a,
+        Err(e) => return V2Result {
+            passed: false,
+            detail: format!("Failed to encode query args: {}", e),
+        },
     };
 
-    // Look up certified_data in the verified certificate's hash tree
-    let path: Vec<Label<&[u8]>> = vec![
-        Label::from("canister".as_bytes()),
-        Label::from(canister_id.as_slice()),
-        Label::from("certified_data".as_bytes()),
-    ];
+    let response = match agent
+        .query(&canister_id, "mktd_get_state_hash")
+        .with_arg(arg)
+        .call()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return V2Result {
+            passed: false,
+            detail: format!("query mktd_get_state_hash failed: {}", e),
+        },
+    };
 
-    match certificate.tree.lookup_path(&path) {
-        LookupResult::Found(data) => {
-            if data.len() != 32 {
-                return V2Result {
-                    passed: false,
-                    detail: format!("certified_data is {} bytes, expected 32", data.len()),
-                };
-            }
-            let actual: [u8; 32] = data.try_into().unwrap();
-            if actual == expected {
-                V2Result { passed: true, detail: String::new() }
-            } else {
-                V2Result {
-                    passed: false,
-                    detail: format!(
-                        "certified_data mismatch:\n    receipt:  {}\n    on-chain: {}",
-                        hex::encode(expected),
-                        hex::encode(actual)
-                    ),
+    let resp = match Decode!(&response, StateHashCertified) {
+        Ok(r) => r,
+        Err(e) => return V2Result {
+            passed: false,
+            detail: format!("failed to decode state hash response: {}", e),
+        },
+    };
+
+    // Check if certificate is present
+    let cert_bytes = match resp.certificate {
+        Some(c) => c.into_vec(),
+        None => return V2Result {
+            passed: false,
+            detail: "Certificate not present in query response. The canister's mktd_get_state_hash endpoint returned null for the certificate field. This may occur with anonymous queries or if the endpoint does not call ic0.data_certificate(). V2 verification requires a certified query.".to_string(),
+        },
+    };
+
+    // Parse and verify the certificate using ic-agent
+    // ic-agent's Certificate verification checks the BLS signature chain
+    use ic_agent::agent::status::Status;
+
+    match ic_agent::Certificate::from_cbor(&cert_bytes) {
+        Ok(certificate) => {
+            // Verify the certificate against the root key
+            match agent.verify(&certificate, canister_id) {
+                Ok(()) => {
+                    // Look up certified_data in the tree
+                    use ic_agent::hash_tree::{Label, LookupResult};
+                    let path: Vec<Label<&[u8]>> = vec![
+                        Label::from("canister".as_bytes()),
+                        Label::from(canister_id.as_slice()),
+                        Label::from("certified_data".as_bytes()),
+                    ];
+                    match certificate.tree.lookup_path(&path) {
+                        LookupResult::Found(data) => {
+                            if data.len() != 32 {
+                                return V2Result {
+                                    passed: false,
+                                    detail: format!("certified_data is {} bytes, expected 32", data.len()),
+                                };
+                            }
+                            let actual: [u8; 32] = data.try_into().unwrap();
+                            if actual == expected {
+                                V2Result { passed: true, detail: String::new() }
+                            } else {
+                                V2Result {
+                                    passed: false,
+                                    detail: format!(
+                                        "certified_data mismatch:\n    receipt:  {}\n    on-chain: {}",
+                                        hex::encode(expected),
+                                        hex::encode(actual)
+                                    ),
+                                }
+                            }
+                        }
+                        _ => V2Result {
+                            passed: false,
+                            detail: "certified_data not found in certificate tree".to_string(),
+                        },
+                    }
                 }
+                Err(e) => V2Result {
+                    passed: false,
+                    detail: format!("Certificate verification failed: {}", e),
+                },
             }
         }
-        LookupResult::Absent => {
-            V2Result {
-                passed: false,
-                detail: "certified_data absent from state tree".to_string(),
-            }
-        }
-        _ => {
-            V2Result {
-                passed: false,
-                detail: "certified_data lookup returned unexpected result".to_string(),
-            }
-        }
+        Err(e) => V2Result {
+            passed: false,
+            detail: format!("Failed to parse certificate CBOR: {}", e),
+        },
     }
 }
