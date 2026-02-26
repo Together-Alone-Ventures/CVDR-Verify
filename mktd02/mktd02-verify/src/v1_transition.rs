@@ -1,5 +1,9 @@
-use anyhow::Result;
 use candid::Principal;
+use zombie_core::hashing::{
+    sha256, hash_with_tag,
+    TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED, TAG_RECEIPT,
+    TOMBSTONE_SEED,
+};
 use crate::fetch::Receipt;
 
 pub struct V1Result {
@@ -36,11 +40,6 @@ impl V1Result {
     }
 }
 
-/// Recompute all 4 derived hashes and compare against receipt fields.
-///
-/// IMPORTANT: This uses zombie_core::hash_with_tag() to ensure identical
-/// code paths to the library. Check the actual zombie-core API and adjust
-/// the calls below if the function signatures differ.
 pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
     let mut result = V1Result {
         tombstone_hash_ok: false,
@@ -72,20 +71,16 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
     let timestamp_bytes = receipt.timestamp.to_le_bytes();
     let nonce_bytes = receipt.nonce.to_le_bytes();
 
-    // --- TOMBSTONE_CONSTANT ---
-    // SHA-256("MKTD_TOMBSTONE_V1")
-    // Check zombie-core for the exact constant or derivation function.
-    let tombstone_constant = zombie_core::hashing::sha256_raw(b"MKTD_TOMBSTONE_V1");
+    // TOMBSTONE_CONSTANT = SHA-256("MKTD_TOMBSTONE_V1")
+    let tombstone_constant = sha256(TOMBSTONE_SEED);
 
-    // --- 1. tombstone_hash ---
-    // SHA-256("MKTD02_TOMBSTONE_HASH_V1" || canister_id || TOMBSTONE_CONSTANT || timestamp || nonce)
-    let mut tombstone_preimage = Vec::new();
-    tombstone_preimage.extend_from_slice(b"MKTD02_TOMBSTONE_HASH_V1");
-    tombstone_preimage.extend_from_slice(canister_bytes);
-    tombstone_preimage.extend_from_slice(&tombstone_constant);
-    tombstone_preimage.extend_from_slice(&timestamp_bytes);
-    tombstone_preimage.extend_from_slice(&nonce_bytes);
-    let expected_tombstone = zombie_core::hashing::sha256_raw(&tombstone_preimage);
+    // 1. tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, canister_id || TOMBSTONE_CONSTANT || timestamp || nonce)
+    let expected_tombstone = hash_with_tag(TAG_TOMBSTONE_HASH, &[
+        canister_bytes,
+        &tombstone_constant,
+        &timestamp_bytes,
+        &nonce_bytes,
+    ]);
 
     match Receipt::hash_field(&receipt.tombstone_hash, "tombstone_hash") {
         Ok(actual) => {
@@ -100,17 +95,15 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
         Err(e) => result.details.push(e.to_string()),
     }
 
-    // --- 2. deletion_event_hash ---
-    // SHA-256("MKTD02_EVENT_V1" || pre_state || post_state || timestamp || module || manifest || nonce)
-    let mut event_preimage = Vec::new();
-    event_preimage.extend_from_slice(b"MKTD02_EVENT_V1");
-    event_preimage.extend_from_slice(&pre_state);
-    event_preimage.extend_from_slice(&post_state);
-    event_preimage.extend_from_slice(&timestamp_bytes);
-    event_preimage.extend_from_slice(&module);
-    event_preimage.extend_from_slice(&manifest);
-    event_preimage.extend_from_slice(&nonce_bytes);
-    let expected_event = zombie_core::hashing::sha256_raw(&event_preimage);
+    // 2. deletion_event_hash = hash_with_tag(TAG_EVENT, pre || post || timestamp || module || manifest || nonce)
+    let expected_event = hash_with_tag(TAG_EVENT, &[
+        &pre_state,
+        &post_state,
+        &timestamp_bytes,
+        &module,
+        &manifest,
+        &nonce_bytes,
+    ]);
 
     match Receipt::hash_field(&receipt.deletion_event_hash, "deletion_event_hash") {
         Ok(actual) => {
@@ -125,13 +118,11 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
         Err(e) => result.details.push(e.to_string()),
     }
 
-    // --- 3. certified_commitment ---
-    // SHA-256("MKTD02_CERTIFIED_V1" || post_state || deletion_event_hash)
-    let mut cert_preimage = Vec::new();
-    cert_preimage.extend_from_slice(b"MKTD02_CERTIFIED_V1");
-    cert_preimage.extend_from_slice(&post_state);
-    cert_preimage.extend_from_slice(&expected_event);
-    let expected_cert = zombie_core::hashing::sha256_raw(&cert_preimage);
+    // 3. certified_commitment = hash_with_tag(TAG_CERTIFIED, post_state || deletion_event_hash)
+    let expected_cert = hash_with_tag(TAG_CERTIFIED, &[
+        &post_state,
+        &expected_event,
+    ]);
 
     match Receipt::hash_field(&receipt.certified_commitment, "certified_commitment") {
         Ok(actual) => {
@@ -146,14 +137,12 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
         Err(e) => result.details.push(e.to_string()),
     }
 
-    // --- 4. receipt_id ---
-    // SHA-256("MKTD02_RECEIPT_V1" || canister_id || timestamp || nonce)
-    let mut id_preimage = Vec::new();
-    id_preimage.extend_from_slice(b"MKTD02_RECEIPT_V1");
-    id_preimage.extend_from_slice(canister_bytes);
-    id_preimage.extend_from_slice(&timestamp_bytes);
-    id_preimage.extend_from_slice(&nonce_bytes);
-    let expected_id = zombie_core::hashing::sha256_raw(&id_preimage);
+    // 4. receipt_id = hash_with_tag(TAG_RECEIPT, canister_id || timestamp || nonce)
+    let expected_id = hash_with_tag(TAG_RECEIPT, &[
+        canister_bytes,
+        &timestamp_bytes,
+        &nonce_bytes,
+    ]);
 
     match Receipt::hash_field(&receipt.receipt_id, "receipt_id") {
         Ok(actual) => {
