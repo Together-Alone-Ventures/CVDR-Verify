@@ -1,5 +1,5 @@
 use anyhow::Result;
-use candid::{Encode, Principal};
+use candid::Principal;
 use ic_agent::Agent;
 use crate::fetch::Receipt;
 
