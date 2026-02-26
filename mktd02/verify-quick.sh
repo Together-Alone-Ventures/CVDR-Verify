@@ -141,17 +141,17 @@ echo ""
 # --- Step 3: V3 — Module Hash Check ---
 echo "[3/4] V3: Module hash verification..."
 
-CANISTER_STATUS=$(dfx canister status "$CANISTER_ID" $NETWORK_FLAG 2>&1) || {
-  echo "  WARNING: Could not fetch canister status. V3 skipped."
+CANISTER_INFO=$(dfx canister info "$CANISTER_ID" $NETWORK_FLAG 2>&1) || {
+  echo "  WARNING: Could not fetch canister info. V3 skipped."
   V3_RESULT="SKIPPED"
-  CANISTER_STATUS=""
+  CANISTER_INFO=""
 }
 
-if [ -n "$CANISTER_STATUS" ]; then
-  ONCHAIN_HASH=$(echo "$CANISTER_STATUS" | grep -oP "Module hash:\s*0x\K[0-9a-fA-F]{64}" | head -1)
+if [ -n "$CANISTER_INFO" ]; then
+  ONCHAIN_HASH=$(echo "$CANISTER_INFO" | grep -oP "Module hash:\s*0x\K[0-9a-fA-F]{64}" | head -1)
 
   if [ -z "$ONCHAIN_HASH" ]; then
-    ONCHAIN_HASH=$(echo "$CANISTER_STATUS" | grep -oP "Module hash:\s*\K[0-9a-fA-F]{64}" | head -1)
+    ONCHAIN_HASH=$(echo "$CANISTER_INFO" | grep -oP "Module hash:\s*\K[0-9a-fA-F]{64}" | head -1)
   fi
 
   if [ -z "$ONCHAIN_HASH" ]; then
@@ -187,7 +187,7 @@ TOMBSTONE_RAW=$(dfx canister call "$CANISTER_ID" mktd_get_tombstone_status $NETW
 }
 
 if [ "$V4_PASS" = true ]; then
-  if echo "$TOMBSTONE_RAW" | grep -qi "is_tombstoned.*=.*true"; then
+  if echo "$TOMBSTONE_RAW" | grep -qE "is_tombstoned.*=.*true|3_838_882_660.*=.*true"; then
     echo "  Tombstone: active"
   else
     V4_PASS=false
