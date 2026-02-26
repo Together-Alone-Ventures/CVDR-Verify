@@ -53,8 +53,8 @@ RECEIPT_RAW=$(dfx canister call "$CANISTER_ID" mktd_get_receipt "(\"$RECEIPT_ID\
   exit 1
 }
 
-# Check for error/null response
-if echo "$RECEIPT_RAW" | grep -qi "err\|null\|not found"; then
+# Check for success — look for "record" in response
+if ! echo "$RECEIPT_RAW" | grep -q "record"; then
   echo "FATAL: Receipt not found. Response:"
   echo "$RECEIPT_RAW"
   exit 1
@@ -64,26 +64,25 @@ echo "  Receipt fetched successfully."
 echo ""
 
 # --- Extract fields from Candid text output ---
-# These patterns match the Candid text representation returned by dfx.
-# Adjust if your canister returns a different format.
+# dfx may return numeric field IDs if Candid interface isn't available.
+# Numeric IDs from Candid field name hashing:
+#   receipt_id=640_735_298  subnet_id=1_097_286_461  canister_id=1_313_628_723
+#   post_state_hash=1_590_697_147  manifest_hash=2_136_315_294
+#   deletion_event_hash=2_634_663_460  nonce=2_680_573_167  timestamp=2_781_795_542
+#   module_hash=2_928_387_969  tombstone_hash=3_300_629_176  commit_mode=3_434_561_515
+#   pre_state_hash=3_547_308_504  certified_commitment=4_249_912_749
 
-extract_hex_field() {
-  local field_name="$1"
+extract_field() {
+  local key="$1"
   local raw="$2"
-  echo "$raw" | grep -oP "${field_name}\s*=\s*\"?\K[0-9a-fA-F]{64}" | head -1
+  echo "$raw" | grep -oP "${key}\s*=\s*\"?\K[^\";\n]+" | head -1 | tr -d ' '
 }
 
-extract_num_field() {
-  local field_name="$1"
-  local raw="$2"
-  echo "$raw" | grep -oP "${field_name}\s*=\s*\K[0-9_]+" | tr -d '_' | head -1
-}
-
-PRE_STATE_HASH=$(extract_hex_field "pre_state_hash" "$RECEIPT_RAW")
-POST_STATE_HASH=$(extract_hex_field "post_state_hash" "$RECEIPT_RAW")
-MODULE_HASH=$(extract_hex_field "module_hash" "$RECEIPT_RAW")
-NONCE=$(extract_num_field "nonce" "$RECEIPT_RAW")
-TIMESTAMP=$(extract_num_field "timestamp" "$RECEIPT_RAW")
+PRE_STATE_HASH=$(extract_field "pre_state_hash\|3_547_308_504" "$RECEIPT_RAW")
+POST_STATE_HASH=$(extract_field "post_state_hash\|1_590_697_147" "$RECEIPT_RAW")
+MODULE_HASH=$(extract_field "module_hash\|2_928_387_969" "$RECEIPT_RAW")
+NONCE=$(extract_field "nonce\|2_680_573_167" "$RECEIPT_RAW" | tr -d '_: nat64')
+TIMESTAMP=$(extract_field "timestamp\|2_781_795_542" "$RECEIPT_RAW" | tr -d '_: nat64')
 
 ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
 
