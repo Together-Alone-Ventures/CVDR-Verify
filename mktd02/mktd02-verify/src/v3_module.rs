@@ -48,10 +48,7 @@ pub async fn verify(
     receipt: &Receipt,
     published_hash: Option<[u8; 32]>,
 ) -> V3Result {
-    let receipt_hash = match Receipt::hash_field(&receipt.module_hash, "module_hash") {
-        Ok(h) => h,
-        Err(e) => return V3Result { classification: V3Classification::Failed(e.to_string()) },
-    };
+    let receipt_hash = receipt.module_hash;
 
     let zeros = [0u8; 32];
 
