@@ -49,24 +49,6 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
         details: Vec::new(),
     };
 
-    // Extract hash fields
-    let pre_state = match Receipt::hash_field(&receipt.pre_state_hash, "pre_state_hash") {
-        Ok(h) => h,
-        Err(e) => { result.details.push(e.to_string()); return result; }
-    };
-    let post_state = match Receipt::hash_field(&receipt.post_state_hash, "post_state_hash") {
-        Ok(h) => h,
-        Err(e) => { result.details.push(e.to_string()); return result; }
-    };
-    let module = match Receipt::hash_field(&receipt.module_hash, "module_hash") {
-        Ok(h) => h,
-        Err(e) => { result.details.push(e.to_string()); return result; }
-    };
-    let manifest = match Receipt::hash_field(&receipt.manifest_hash, "manifest_hash") {
-        Ok(h) => h,
-        Err(e) => { result.details.push(e.to_string()); return result; }
-    };
-
     let canister_bytes = canister_id.as_slice();
     let timestamp_bytes = receipt.timestamp.to_le_bytes();
     let nonce_bytes = receipt.nonce.to_le_bytes();
@@ -74,87 +56,63 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
     // TOMBSTONE_CONSTANT = SHA-256("MKTD_TOMBSTONE_V1")
     let tombstone_constant = sha256(TOMBSTONE_SEED);
 
-    // 1. tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, canister_id || TOMBSTONE_CONSTANT || timestamp || nonce)
+    // 1. tombstone_hash
     let expected_tombstone = hash_with_tag(TAG_TOMBSTONE_HASH, &[
         canister_bytes,
         &tombstone_constant,
         &timestamp_bytes,
         &nonce_bytes,
     ]);
-
-    match Receipt::hash_field(&receipt.tombstone_hash, "tombstone_hash") {
-        Ok(actual) => {
-            result.tombstone_hash_ok = actual == expected_tombstone;
-            if !result.tombstone_hash_ok {
-                result.details.push(format!(
-                    "tombstone_hash mismatch:\n    expected: {}\n    actual:   {}",
-                    hex::encode(expected_tombstone), hex::encode(actual)
-                ));
-            }
-        }
-        Err(e) => result.details.push(e.to_string()),
+    result.tombstone_hash_ok = receipt.tombstone_hash == expected_tombstone;
+    if !result.tombstone_hash_ok {
+        result.details.push(format!(
+            "tombstone_hash mismatch:\n    expected: {}\n    actual:   {}",
+            hex::encode(expected_tombstone), hex::encode(receipt.tombstone_hash)
+        ));
     }
 
-    // 2. deletion_event_hash = hash_with_tag(TAG_EVENT, pre || post || timestamp || module || manifest || nonce)
+    // 2. deletion_event_hash
     let expected_event = hash_with_tag(TAG_EVENT, &[
-        &pre_state,
-        &post_state,
+        &receipt.pre_state_hash,
+        &receipt.post_state_hash,
         &timestamp_bytes,
-        &module,
-        &manifest,
+        &receipt.module_hash,
+        &receipt.manifest_hash,
         &nonce_bytes,
     ]);
-
-    match Receipt::hash_field(&receipt.deletion_event_hash, "deletion_event_hash") {
-        Ok(actual) => {
-            result.deletion_event_hash_ok = actual == expected_event;
-            if !result.deletion_event_hash_ok {
-                result.details.push(format!(
-                    "deletion_event_hash mismatch:\n    expected: {}\n    actual:   {}",
-                    hex::encode(expected_event), hex::encode(actual)
-                ));
-            }
-        }
-        Err(e) => result.details.push(e.to_string()),
+    result.deletion_event_hash_ok = receipt.deletion_event_hash == expected_event;
+    if !result.deletion_event_hash_ok {
+        result.details.push(format!(
+            "deletion_event_hash mismatch:\n    expected: {}\n    actual:   {}",
+            hex::encode(expected_event), hex::encode(receipt.deletion_event_hash)
+        ));
     }
 
-    // 3. certified_commitment = hash_with_tag(TAG_CERTIFIED, post_state || deletion_event_hash)
+    // 3. certified_commitment
     let expected_cert = hash_with_tag(TAG_CERTIFIED, &[
-        &post_state,
+        &receipt.post_state_hash,
         &expected_event,
     ]);
-
-    match Receipt::hash_field(&receipt.certified_commitment, "certified_commitment") {
-        Ok(actual) => {
-            result.certified_commitment_ok = actual == expected_cert;
-            if !result.certified_commitment_ok {
-                result.details.push(format!(
-                    "certified_commitment mismatch:\n    expected: {}\n    actual:   {}",
-                    hex::encode(expected_cert), hex::encode(actual)
-                ));
-            }
-        }
-        Err(e) => result.details.push(e.to_string()),
+    result.certified_commitment_ok = receipt.certified_commitment == expected_cert;
+    if !result.certified_commitment_ok {
+        result.details.push(format!(
+            "certified_commitment mismatch:\n    expected: {}\n    actual:   {}",
+            hex::encode(expected_cert), hex::encode(receipt.certified_commitment)
+        ));
     }
 
-    // 4. receipt_id = hash_with_tag(TAG_RECEIPT, canister_id || timestamp || nonce)
+    // 4. receipt_id
     let expected_id = hash_with_tag(TAG_RECEIPT, &[
         canister_bytes,
         &timestamp_bytes,
         &nonce_bytes,
     ]);
-
-    match Receipt::hash_field(&receipt.receipt_id, "receipt_id") {
-        Ok(actual) => {
-            result.receipt_id_ok = actual == expected_id;
-            if !result.receipt_id_ok {
-                result.details.push(format!(
-                    "receipt_id mismatch:\n    expected: {}\n    actual:   {}",
-                    hex::encode(expected_id), hex::encode(actual)
-                ));
-            }
-        }
-        Err(e) => result.details.push(e.to_string()),
+    result.receipt_id_ok = receipt.receipt_id == expected_id;
+    if !result.receipt_id_ok {
+        result.details.push(format!(
+            "receipt_id mismatch:\n    expected: {}\n    actual:   {}",
+            hex::encode(expected_id), hex::encode(receipt.receipt_id)
+        ));
     }
 
     result
