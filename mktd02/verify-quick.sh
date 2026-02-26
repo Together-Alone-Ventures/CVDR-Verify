@@ -202,7 +202,11 @@ if [ "$V4_PASS" = true ]; then
   }
 
   if [ "$V4_PASS" = true ]; then
+    # State hash may be returned as blob "\xx\xx..." or hex string
     CURRENT_HASH=$(echo "$STATE_HASH_RAW" | grep -oP '[0-9a-fA-F]{64}' | head -1)
+    if [ -z "$CURRENT_HASH" ]; then
+      CURRENT_HASH=$(echo "$STATE_HASH_RAW" | grep -oP 'blob "\\[^"]+' | head -1 | sed 's/blob "//;s/\\//g')
+    fi
 
     if [ -z "$CURRENT_HASH" ]; then
       V4_PASS=false
