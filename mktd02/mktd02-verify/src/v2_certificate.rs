@@ -42,10 +42,7 @@ pub async fn verify(
     canister_id: Principal,
     receipt: &Receipt,
 ) -> V2Result {
-    let expected = match Receipt::hash_field(&receipt.certified_commitment, "certified_commitment") {
-        Ok(h) => h,
-        Err(e) => return V2Result { passed: false, detail: e.to_string() },
-    };
+    let expected = receipt.certified_commitment;
 
     // Approach: Use a certified query to mktd_get_state_hash, which returns
     // the certificate alongside the data. The agent verifies the BLS chain.
