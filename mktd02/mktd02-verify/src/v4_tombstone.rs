@@ -12,8 +12,8 @@ pub struct TombstoneStatus {
 
 #[derive(Debug, CandidType, Deserialize)]
 pub struct StateHashResponse {
-    pub certificate: Option<Vec<u8>>,
-    pub hash: String,
+    pub certificate: Option<serde_bytes::ByteBuf>,
+    pub hash: serde_bytes::ByteBuf,
 }
 
 pub struct V4Result {
@@ -118,15 +118,21 @@ async fn query_state_hash(
         .await
         .map_err(|e| anyhow::anyhow!("query mktd_get_state_hash failed: {}", e))?;
 
-    // Try as StateHashResponse struct (record with certificate + hash)
+    // Try as StateHashResponse struct (record with certificate + hash as blobs)
     if let Ok(resp) = Decode!(&response, StateHashResponse) {
-        let bytes = hex::decode(&resp.hash)
-            .map_err(|e| anyhow::anyhow!("state hash hex decode failed: {}", e))?;
+        let bytes: Vec<u8> = resp.hash.into_vec();
         return bytes.try_into()
             .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
     }
 
-    // Try as a plain record with just a hash string
+    // Try as plain blob
+    if let Ok(hash_bytes) = Decode!(&response, serde_bytes::ByteBuf) {
+        let bytes: Vec<u8> = hash_bytes.into_vec();
+        return bytes.try_into()
+            .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
+    }
+
+    // Try as hex string
     if let Ok(hash_hex) = Decode!(&response, String) {
         let bytes = hex::decode(&hash_hex)
             .map_err(|e| anyhow::anyhow!("state hash hex decode failed: {}", e))?;
