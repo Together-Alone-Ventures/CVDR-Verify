@@ -16,6 +16,7 @@ pub struct V3Result {
     pub classification: V3Classification,
 }
 
+#[allow(dead_code)]
 impl V3Result {
     pub fn passed(&self) -> bool {
         // V3 doesn't have a hard pass/fail — only SUSPICIOUS is a concern
