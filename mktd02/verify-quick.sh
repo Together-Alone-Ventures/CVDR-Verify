@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-NETWORK_FLAG="--network $NETWORK"
+NETWORK_FLAG="--network $NETWORK --identity anonymous"
 PASS=0
 FAIL=0
 V1_RESULT=""
