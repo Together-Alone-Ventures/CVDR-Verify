@@ -10,6 +10,12 @@ pub struct TombstoneStatus {
     pub tombstoned_at: Option<u64>,
 }
 
+#[derive(Debug, CandidType, Deserialize)]
+pub struct StateHashResponse {
+    pub certificate: Option<Vec<u8>>,
+    pub hash: String,
+}
+
 pub struct V4Result {
     pub tombstone_ok: bool,
     pub state_hash_ok: bool,
@@ -30,7 +36,6 @@ impl V4Result {
     }
 }
 
-/// Check tombstone persistence and current state hash.
 pub async fn verify(
     agent: &Agent,
     canister_id: Principal,
@@ -113,14 +118,15 @@ async fn query_state_hash(
         .await
         .map_err(|e| anyhow::anyhow!("query mktd_get_state_hash failed: {}", e))?;
 
-    // The canister may return the hash as Vec<u8> or as a struct
-    // Try Vec<u8> first
-    if let Ok(hash_bytes) = Decode!(&response, Vec<u8>) {
-        return hash_bytes.try_into()
+    // Try as StateHashResponse struct (record with certificate + hash)
+    if let Ok(resp) = Decode!(&response, StateHashResponse) {
+        let bytes = hex::decode(&resp.hash)
+            .map_err(|e| anyhow::anyhow!("state hash hex decode failed: {}", e))?;
+        return bytes.try_into()
             .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
     }
 
-    // Try as hex string
+    // Try as a plain record with just a hash string
     if let Ok(hash_hex) = Decode!(&response, String) {
         let bytes = hex::decode(&hash_hex)
             .map_err(|e| anyhow::anyhow!("state hash hex decode failed: {}", e))?;
