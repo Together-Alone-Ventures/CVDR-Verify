@@ -33,7 +33,7 @@ pub async fn verify(
     canister_id: Principal,
     receipt: &Receipt,
 ) -> V2Result {
-    let expected = receipt.certified_commitment;
+    let _expected = receipt.certified_commitment;
 
     let arg = match Encode!() {
         Ok(a) => a,
