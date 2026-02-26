@@ -72,17 +72,32 @@ echo ""
 #   module_hash=2_928_387_969  tombstone_hash=3_300_629_176  commit_mode=3_434_561_515
 #   pre_state_hash=3_547_308_504  certified_commitment=4_249_912_749
 
-extract_field() {
-  local key="$1"
-  local raw="$2"
-  echo "$raw" | grep -oP "${key}\s*=\s*\"?\K[^\";\n]+" | head -1 | tr -d ' '
+# Extract a quoted hex string field by key
+extract_hex() {
+  local raw="$1"
+  local key="$2"
+  echo "$raw" | grep -oP "${key}\s*=\s*\"\K[0-9a-fA-F]{64}" | head -1 || echo ""
 }
 
-PRE_STATE_HASH=$(extract_field "pre_state_hash\|3_547_308_504" "$RECEIPT_RAW")
-POST_STATE_HASH=$(extract_field "post_state_hash\|1_590_697_147" "$RECEIPT_RAW")
-MODULE_HASH=$(extract_field "module_hash\|2_928_387_969" "$RECEIPT_RAW")
-NONCE=$(extract_field "nonce\|2_680_573_167" "$RECEIPT_RAW" | tr -d '_: nat64')
-TIMESTAMP=$(extract_field "timestamp\|2_781_795_542" "$RECEIPT_RAW" | tr -d '_: nat64')
+# Extract a numeric field by key (strips underscores)
+extract_num() {
+  local raw="$1"
+  local key="$2"
+  echo "$raw" | grep -oP "${key}\s*=\s*\K[0-9_]+" | head -1 | tr -d '_' || echo ""
+}
+
+# Use numeric Candid field IDs (dfx returns these without .did file)
+# Also try named fields in case Candid interface is available
+PRE_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "3_547_308_504")
+[ -z "$PRE_STATE_HASH" ] && PRE_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "pre_state_hash")
+POST_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "1_590_697_147")
+[ -z "$POST_STATE_HASH" ] && POST_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "post_state_hash")
+MODULE_HASH=$(extract_hex "$RECEIPT_RAW" "2_928_387_969")
+[ -z "$MODULE_HASH" ] && MODULE_HASH=$(extract_hex "$RECEIPT_RAW" "module_hash")
+NONCE=$(extract_num "$RECEIPT_RAW" "2_680_573_167")
+[ -z "$NONCE" ] && NONCE=$(extract_num "$RECEIPT_RAW" "nonce")
+TIMESTAMP=$(extract_num "$RECEIPT_RAW" "2_781_795_542")
+[ -z "$TIMESTAMP" ] && TIMESTAMP=$(extract_num "$RECEIPT_RAW" "timestamp")
 
 ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
 
