@@ -21,6 +21,15 @@ Downloading these tools from TAV's GitHub means trusting TAV's source code. This
 - BLS certificate verification (MKTd02/MKTd03) uses [ic-agent](https://github.com/dfinity/agent-rs), a widely-audited open-source library maintained by DFINITY.
 - What no tool can verify: whether the enterprise's adapter correctly maps all PII fields (Residual Trust assumption RT3). That requires source code audit of the adapter.
 
+## Disclaimer
+
+This repository is **reference code** provided as a convenience. It is not legal advice, and its use does not constitute a legal opinion, compliance certification, or regulatory approval of any kind.
+
+- **No warranty.** These tools are provided "as is" under the Apache-2.0 licence, without warranty of any kind, express or implied. Together Alone Ventures makes no guarantees regarding the correctness, completeness, or fitness for purpose of any verification output.
+- **Not a substitute for independent due diligence.** Verifiers — whether data subjects, auditors, regulators, or enterprise integrators — are responsible for their own assessment of verification results. A PASS result from these tools does not, by itself, prove legal compliance with GDPR Article 17 or any other regulation.
+- **Verification scope is limited.** These tools verify the cryptographic integrity of a CVDR and the consistency of on-chain state. They cannot verify that an enterprise's adapter correctly maps all PII fields (Residual Trust assumption RT3 — see the MKTd02 Integration Guide). That requires source code audit of the adapter implementation.
+- **Not legal or regulatory guidance.** Nothing in this repository should be interpreted as legal, regulatory, or compliance advice. Consult qualified legal counsel for matters of data protection law.
+
 ## Directory Layout
 
 | Directory | Product | Status |
