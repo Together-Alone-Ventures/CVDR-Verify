@@ -117,3 +117,73 @@ pub fn verify(receipt: &Receipt, canister_id: Principal) -> V1Result {
 
     result
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zombie_core::hashing::{sha256, hash_with_tag, TOMBSTONE_SEED,
+        TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED, TAG_RECEIPT};
+
+    /// Golden vector test: synthetic receipt with known inputs.
+    /// Locks down field ordering in every hash_with_tag call.
+    /// If any input ordering changes, this test fails.
+    #[test]
+    fn golden_v1_full_verification() {
+        let canister_id = Principal::from_text("aaaaa-aa").unwrap();
+        let canister_bytes = canister_id.as_slice();
+        let timestamp: u64 = 1_000_000;
+        let nonce: u64 = 1;
+        let timestamp_bytes = timestamp.to_be_bytes();
+        let nonce_bytes = nonce.to_be_bytes();
+
+        let pre_state_hash = [0xAA; 32];
+        let post_state_hash = [0xBB; 32];
+        let manifest_hash = [0xCC; 32];
+        let module_hash = [0xDD; 32];
+
+        // Compute expected hashes
+        let tombstone_constant = sha256(TOMBSTONE_SEED);
+        let tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, &[
+            canister_bytes, &tombstone_constant, &timestamp_bytes, &nonce_bytes,
+        ]);
+        let deletion_event_hash = hash_with_tag(TAG_EVENT, &[
+            &pre_state_hash, &post_state_hash, &timestamp_bytes,
+            &module_hash, &manifest_hash, &nonce_bytes,
+        ]);
+        let certified_commitment = hash_with_tag(TAG_CERTIFIED, &[
+            &post_state_hash, &deletion_event_hash,
+        ]);
+        let receipt_id = hash_with_tag(TAG_RECEIPT, &[
+            canister_bytes, &nonce_bytes,
+        ]);
+
+        // Lock down exact values (computed once, never change)
+        assert_eq!(hex::encode(tombstone_hash),
+            "a7ed8b1f03c075e1c7e1a7b3cd93422a8c5b7013f5a14c4c9d3e01f5ecbf34c0");
+        assert_eq!(hex::encode(receipt_id),
+            "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b");
+
+        // Build synthetic receipt
+        let receipt = Receipt {
+            receipt_id,
+            canister_id,
+            subnet_id: Principal::from_text("2vxsx-fae").unwrap(),
+            commit_mode: "Leaf".into(),
+            pre_state_hash,
+            post_state_hash,
+            tombstone_hash,
+            deletion_event_hash,
+            certified_commitment,
+            manifest_hash,
+            module_hash,
+            timestamp,
+            nonce,
+        };
+
+        let result = verify(&receipt, canister_id);
+        assert!(result.tombstone_hash_ok, "tombstone_hash mismatch");
+        assert!(result.deletion_event_hash_ok, "deletion_event_hash mismatch");
+        assert!(result.certified_commitment_ok, "certified_commitment mismatch");
+        assert!(result.receipt_id_ok, "receipt_id mismatch");
+        assert!(result.passed(), "V1 should pass: {:?}", result.details);
+    }
+}
