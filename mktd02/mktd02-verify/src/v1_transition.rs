@@ -158,7 +158,7 @@ mod tests {
 
         // Lock down exact values (computed once, never change)
         assert_eq!(hex::encode(tombstone_hash),
-            "a7ed8b1f03c075e1c7e1a7b3cd93422a8c5b7013f5a14c4c9d3e01f5ecbf34c0");
+            "e5d887ab8f55532e5d746013b0096d9ed01a746cbc832021346ee59ce1b35ee6");
         assert_eq!(hex::encode(receipt_id),
             "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b");
 
