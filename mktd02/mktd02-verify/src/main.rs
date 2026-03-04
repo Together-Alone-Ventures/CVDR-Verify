@@ -40,7 +40,8 @@ async fn main() -> Result<()> {
     let published_hash: Option<[u8; 32]> = match &cli.wasm_hash {
         Some(h) => {
             let bytes = hex::decode(h)?;
-            let arr: [u8; 32] = bytes.try_into()
+            let arr: [u8; 32] = bytes
+                .try_into()
                 .map_err(|_| anyhow::anyhow!("--wasm-hash must be 64 hex chars (32 bytes)"))?;
             Some(arr)
         }
@@ -66,25 +67,26 @@ async fn main() -> Result<()> {
     println!();
 
     // Step 1: Fetch receipt
-    println!("[1/4] Fetching receipt...");
+    println!("[1/5] Fetching receipt...");
     let receipt = fetch::fetch_receipt(&agent, canister_id, &cli.receipt_id).await?;
+    println!("  protocol_version : {}", receipt.protocol_version);
     println!("  Receipt fetched successfully.");
     println!();
 
     // Step 2: V1 — Hash recomputation
-    println!("[2/4] V1: State transition verification...");
+    println!("[2/5] V1: State transition verification...");
     let v1 = v1_transition::verify(&receipt, canister_id);
     println!("  {}", v1.summary());
     println!();
 
     // Step 3: V2 — BLS certificate
-    println!("[3/4] V2: Subnet certificate verification...");
+    println!("[3/5] V2: Subnet certificate verification...");
     let v2 = v2_certificate::verify(&agent, canister_id, &receipt).await;
     println!("  {}", v2.summary());
     println!();
 
     // Step 4: V3 — Module hash
-    println!("[4/4] V3: Module hash verification...");
+    println!("[4/5] V3: Module hash verification...");
     let v3 = v3_module::verify(&agent, canister_id, &receipt, published_hash).await;
     println!("  {}", v3.summary());
     println!();
@@ -99,9 +101,9 @@ async fn main() -> Result<()> {
     println!("============================================================");
     println!(" CVDR Verification Summary");
     println!("============================================================");
-    println!(" {:<16} : {}", "V1 (hashes)", v1.summary());
+    println!(" {:<16} : {}", "V1 (hashes)",   v1.summary());
     println!(" {:<16} : {}", "V2 (BLS cert)", v2.summary());
-    println!(" {:<16} : {}", "V3 (module)", v3.summary());
+    println!(" {:<16} : {}", "V3 (module)",   v3.summary());
     println!(" {:<16} : {}", "V4 (tombstone)", v4.summary());
     println!("============================================================");
 

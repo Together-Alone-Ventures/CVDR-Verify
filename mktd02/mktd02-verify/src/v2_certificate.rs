@@ -1,8 +1,7 @@
 use candid::{CandidType, Decode, Encode, Principal};
 use ic_agent::Agent;
 use serde::Deserialize;
-
-use crate::fetch::Receipt;
+use zombie_core::receipt::DeletionReceipt;
 
 #[derive(Debug, CandidType, Deserialize)]
 struct StateHashCertified {
@@ -33,13 +32,22 @@ impl V2Result {
 pub async fn verify(
     agent: &Agent,
     canister_id: Principal,
-    receipt: &Receipt,
+    receipt: &DeletionReceipt,
 ) -> V2Result {
     let expected = receipt.certified_commitment;
 
     // Step 1: Query mktd_get_state_hash — returns certificate + hash.
     // The canister calls ic0.data_certificate() during this query,
     // embedding the subnet's BLS-signed certificate in the response.
+    //
+    // NOTE: This query MUST be an ingress query (external caller).
+    // Canister-to-canister calls cannot obtain the certificate blob even
+    // if the target method is declared as query — they always go through
+    // consensus. This is a foundational ICP platform constraint.
+    //
+    // TODO(Change A): use receipt.trust_root_key_id to select the correct
+    // NNS root key from the zombie-core allowlist. Never assume the current
+    // active key is the right one for a historical receipt.
     let arg = match Encode!() {
         Ok(a) => a,
         Err(e) => return V2Result {
@@ -124,10 +132,7 @@ pub async fn verify(
             }
             let actual: [u8; 32] = data.try_into().unwrap();
             if actual == expected {
-                V2Result {
-                    passed: true,
-                    detail: String::new(),
-                }
+                V2Result { passed: true, detail: String::new() }
             } else {
                 V2Result {
                     passed: false,

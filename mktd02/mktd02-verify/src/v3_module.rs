@@ -1,7 +1,7 @@
 use anyhow::Result;
 use candid::Principal;
 use ic_agent::Agent;
-use crate::fetch::Receipt;
+use zombie_core::receipt::DeletionReceipt;
 
 pub enum V3Classification {
     Match,
@@ -20,7 +20,10 @@ pub struct V3Result {
 impl V3Result {
     pub fn passed(&self) -> bool {
         // V3 doesn't have a hard pass/fail — only SUSPICIOUS is a concern
-        !matches!(self.classification, V3Classification::MismatchSuspicious | V3Classification::Failed(_))
+        !matches!(
+            self.classification,
+            V3Classification::MismatchSuspicious | V3Classification::Failed(_)
+        )
     }
 
     pub fn summary(&self) -> String {
@@ -28,13 +31,17 @@ impl V3Result {
             V3Classification::Match =>
                 "V3: MATCH — canister code unchanged since deletion".to_string(),
             V3Classification::MismatchExpected =>
-                "V3: MISMATCH-EXPECTED — canister upgraded since deletion (receipt remains valid under prior code version)".to_string(),
+                "V3: MISMATCH-EXPECTED — canister upgraded since deletion \
+                 (receipt remains valid under prior code version)".to_string(),
             V3Classification::MismatchSuspicious =>
-                "V3: MISMATCH-SUSPICIOUS — receipt has dev zeros, cannot verify code provenance".to_string(),
+                "V3: MISMATCH-SUSPICIOUS — receipt has dev zeros, \
+                 cannot verify code provenance".to_string(),
             V3Classification::FullMatch =>
-                "V3: FULL MATCH — code provenance confirmed end-to-end (on-chain == receipt == published)".to_string(),
+                "V3: FULL MATCH — code provenance confirmed end-to-end \
+                 (on-chain == receipt == published)".to_string(),
             V3Classification::MismatchExpectedWithProvenance =>
-                "V3: MISMATCH-EXPECTED with provenance — upgraded since deletion, but deletion-time code confirmed against published hash".to_string(),
+                "V3: MISMATCH-EXPECTED with provenance — upgraded since deletion, \
+                 but deletion-time code confirmed against published hash".to_string(),
             V3Classification::Failed(e) =>
                 format!("V3: FAILED — {}", e),
         }
@@ -45,18 +52,19 @@ impl V3Result {
 pub async fn verify(
     agent: &Agent,
     canister_id: Principal,
-    receipt: &Receipt,
+    receipt: &DeletionReceipt,
     published_hash: Option<[u8; 32]>,
 ) -> V3Result {
     let receipt_hash = receipt.module_hash;
-
     let zeros = [0u8; 32];
 
     // Fetch current on-chain module hash
     let onchain_hash = match read_module_hash(agent, canister_id).await {
         Ok(h) => h,
         Err(e) => return V3Result {
-            classification: V3Classification::Failed(format!("Could not read module hash: {}", e)),
+            classification: V3Classification::Failed(
+                format!("Could not read module hash: {}", e)
+            ),
         },
     };
 
@@ -66,23 +74,19 @@ pub async fn verify(
     }
 
     if onchain_hash == receipt_hash {
-        // On-chain matches receipt — check published if available
         match published_hash {
             Some(pub_hash) if pub_hash == receipt_hash => {
                 V3Result { classification: V3Classification::FullMatch }
             }
-            Some(_) => {
-                // On-chain == receipt but != published — unusual, flag it
-                V3Result {
-                    classification: V3Classification::Failed(
-                        "on-chain matches receipt but differs from published hash — investigate".to_string()
-                    ),
-                }
-            }
+            Some(_) => V3Result {
+                classification: V3Classification::Failed(
+                    "on-chain matches receipt but differs from published hash — investigate"
+                        .to_string()
+                ),
+            },
             None => V3Result { classification: V3Classification::Match },
         }
     } else {
-        // On-chain differs from receipt — canister was upgraded
         match published_hash {
             Some(pub_hash) if pub_hash == receipt_hash => {
                 V3Result { classification: V3Classification::MismatchExpectedWithProvenance }
@@ -93,15 +97,13 @@ pub async fn verify(
 }
 
 /// Read the canister's current module hash via read_state.
-async fn read_module_hash(
-    agent: &Agent,
-    canister_id: Principal,
-) -> Result<[u8; 32]> {
+async fn read_module_hash(agent: &Agent, canister_id: Principal) -> Result<[u8; 32]> {
     let hash_bytes = agent
         .read_state_canister_info(canister_id, "module_hash")
         .await
         .map_err(|e| anyhow::anyhow!("read_state module_hash failed: {}", e))?;
 
-    hash_bytes.try_into()
+    hash_bytes
+        .try_into()
         .map_err(|_| anyhow::anyhow!("module_hash from IC is not 32 bytes"))
 }

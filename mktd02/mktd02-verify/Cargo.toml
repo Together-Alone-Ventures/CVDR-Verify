@@ -5,7 +5,11 @@ edition = "2021"
 description = "Standalone V1-V4 verification tool for MKTd02 CVDRs"
 
 [dependencies]
-zombie-core = { git = "https://github.com/Together-Alone-Ventures/MKTd02.git", package = "zombie-core" }
+# Pin by commit hash during active development.
+# Switch to tag = "zombie-core-vX.Y.Z" for releases.
+# NAMING CONVENTION: always write "zombie-core vX.Y.Z" when referencing
+# this alongside MKTd02 version strings — never just "v0.x.y".
+zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", rev = "b5eed47870a12e89c6381df1ab69a7e77c541498" }
 ic-agent = "0.39"
 candid = "0.10"
 clap = { version = "4", features = ["derive"] }
@@ -15,3 +19,4 @@ anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_cbor = "0.11"
+ciborium = "0.2"

@@ -1,79 +1,27 @@
 use anyhow::{anyhow, Result};
-use candid::{CandidType, Decode, Encode, Principal};
+use candid::{Decode, Encode, Principal};
 use ic_agent::Agent;
-use serde::Deserialize;
+use zombie_core::receipt::DeletionReceipt;
 
-/// CVDR receipt as returned by mktd_get_receipt()
-/// The canister returns hash fields as hex strings, not blobs.
-#[derive(Debug, Clone, CandidType, Deserialize)]
-pub struct RawReceipt {
-    pub receipt_id: String,
-    pub canister_id: Principal,
-    pub subnet_id: Principal,
-    pub commit_mode: String,
-    pub pre_state_hash: String,
-    pub post_state_hash: String,
-    pub tombstone_hash: String,
-    pub deletion_event_hash: String,
-    pub certified_commitment: String,
-    pub manifest_hash: String,
-    pub module_hash: String,
-    pub timestamp: u64,
-    pub nonce: u64,
-}
-
-/// Parsed receipt with hash fields as byte arrays
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct Receipt {
-    pub receipt_id: [u8; 32],
-    pub canister_id: Principal,
-    pub subnet_id: Principal,
-    pub commit_mode: String,
-    pub pre_state_hash: [u8; 32],
-    pub post_state_hash: [u8; 32],
-    pub tombstone_hash: [u8; 32],
-    pub deletion_event_hash: [u8; 32],
-    pub certified_commitment: [u8; 32],
-    pub manifest_hash: [u8; 32],
-    pub module_hash: [u8; 32],
-    pub timestamp: u64,
-    pub nonce: u64,
-}
-
-fn decode_hash(hex_str: &str, field: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| anyhow!("{}: invalid hex: {}", field, e))?;
-    bytes.try_into()
-        .map_err(|_| anyhow!("{}: expected 32 bytes, got {}", field, hex_str.len() / 2))
-}
-
-impl RawReceipt {
-    pub fn into_receipt(self) -> Result<Receipt> {
-        Ok(Receipt {
-            receipt_id: decode_hash(&self.receipt_id, "receipt_id")?,
-            canister_id: self.canister_id,
-            subnet_id: self.subnet_id,
-            commit_mode: self.commit_mode,
-            pre_state_hash: decode_hash(&self.pre_state_hash, "pre_state_hash")?,
-            post_state_hash: decode_hash(&self.post_state_hash, "post_state_hash")?,
-            tombstone_hash: decode_hash(&self.tombstone_hash, "tombstone_hash")?,
-            deletion_event_hash: decode_hash(&self.deletion_event_hash, "deletion_event_hash")?,
-            certified_commitment: decode_hash(&self.certified_commitment, "certified_commitment")?,
-            manifest_hash: decode_hash(&self.manifest_hash, "manifest_hash")?,
-            module_hash: decode_hash(&self.module_hash, "module_hash")?,
-            timestamp: self.timestamp,
-            nonce: self.nonce,
-        })
-    }
-}
-
-/// Fetch a receipt from the canister by hex-encoded receipt_id
+/// Fetch a CVDR receipt from the canister by hex-encoded receipt_id.
+///
+/// The canister's `mktd_get_receipt` endpoint returns
+/// `Option<DeletionReceipt>` encoded in Candid. Because both the canister
+/// and this tool now depend on `zombie_core::receipt::DeletionReceipt` (with
+/// identical `CandidType` derive), decoding is straightforward — no manual
+/// field conversion required.
+///
+/// # Trust root key selection
+/// `DeletionReceipt.trust_root_key` contains the raw NNS root key bytes used
+/// at finalization time. Change A will add `trust_root_key_id` to the receipt;
+/// at that point V2 verification must select the key by `trust_root_key_id`
+/// (never assume the current active key is correct for a historical receipt).
+/// TODO(Change A): implement key selection by trust_root_key_id.
 pub async fn fetch_receipt(
     agent: &Agent,
     canister_id: Principal,
     receipt_id_hex: &str,
-) -> Result<Receipt> {
+) -> Result<DeletionReceipt> {
     let arg = Encode!(&receipt_id_hex)?;
 
     let response = agent
@@ -83,15 +31,110 @@ pub async fn fetch_receipt(
         .await
         .map_err(|e| anyhow!("Query mktd_get_receipt failed: {}", e))?;
 
-    // Canister returns opt record (Option<RawReceipt>)
-    if let Ok(Some(raw)) = Decode!(&response, Option<RawReceipt>) {
-        return raw.into_receipt();
+    // Primary: canister returns opt DeletionReceipt
+    if let Ok(Some(receipt)) = Decode!(&response, Option<DeletionReceipt>) {
+        return Ok(receipt);
     }
 
-    // Fallback: try direct decode
-    if let Ok(raw) = Decode!(&response, RawReceipt) {
-        return raw.into_receipt();
+    // Fallback: try direct (non-optional) decode
+    if let Ok(receipt) = Decode!(&response, DeletionReceipt) {
+        return Ok(receipt);
     }
 
-    Err(anyhow!("Failed to decode receipt — check Candid interface"))
+    Err(anyhow!(
+        "Failed to decode receipt from canister {} — check Candid interface matches zombie-core v0.2.0+",
+        canister_id
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Golden receipt fixture
+// ---------------------------------------------------------------------------
+// These tests assert that zombie-core's canonical DeletionReceipt round-trips
+// through CBOR serialisation correctly and that critical hash fields are
+// preserved exactly. If zombie-core's serialisation changes in a way that
+// alters field values, these tests will catch it before the change reaches
+// production.
+//
+// We do NOT store a raw CBOR blob here because the blob would need to be
+// regenerated every time a non-hash field (e.g. protocol_version string)
+// changes. Instead we assert field-level round-trip fidelity and exact hash
+// values — which is what matters for verification correctness.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+    use zombie_core::receipt::ProtocolVersion;
+
+    fn golden_receipt() -> DeletionReceipt {
+        DeletionReceipt {
+            protocol_version: ProtocolVersion::V2.into(),
+            receipt_id:           [0x1F; 32],
+            canister_id:          Principal::from_text("aaaaa-aa").unwrap(),
+            subnet_id:            Principal::from_text("2vxsx-fae").unwrap(),
+            pre_state_hash:       [0xAA; 32],
+            post_state_hash:      [0xBB; 32],
+            tombstone_hash:       [0xCC; 32],
+            deletion_event_hash:  [0xDD; 32],
+            certified_commitment: [0xEE; 32],
+            module_hash:          [0xFF; 32],
+            timestamp:            1_000_000,
+            nonce:                1,
+            bls_certificate:      None,
+            trust_root_key:       vec![0u8; 96],
+        }
+    }
+
+    /// Hash fields must survive CBOR round-trip without any byte mutation.
+    /// This guards against accidental endianness swaps, truncation, or
+    /// field reordering in zombie-core's serialisation layer.
+    #[test]
+    fn golden_receipt_cbor_round_trip() {
+        let original = golden_receipt();
+
+        // Encode to CBOR
+        let mut buf = Vec::new();
+        ciborium::into_writer(&original, &mut buf)
+            .expect("CBOR encode failed");
+
+        // Decode back
+        let decoded: DeletionReceipt = ciborium::from_reader(buf.as_slice())
+            .expect("CBOR decode failed");
+
+        // All hash fields must be byte-identical
+        assert_eq!(decoded.receipt_id,           original.receipt_id,           "receipt_id mutated");
+        assert_eq!(decoded.pre_state_hash,        original.pre_state_hash,       "pre_state_hash mutated");
+        assert_eq!(decoded.post_state_hash,       original.post_state_hash,      "post_state_hash mutated");
+        assert_eq!(decoded.tombstone_hash,        original.tombstone_hash,       "tombstone_hash mutated");
+        assert_eq!(decoded.deletion_event_hash,   original.deletion_event_hash,  "deletion_event_hash mutated");
+        assert_eq!(decoded.certified_commitment,  original.certified_commitment, "certified_commitment mutated");
+        assert_eq!(decoded.module_hash,           original.module_hash,          "module_hash mutated");
+        assert_eq!(decoded.timestamp,             original.timestamp,            "timestamp mutated");
+        assert_eq!(decoded.nonce,                 original.nonce,                "nonce mutated");
+        assert_eq!(decoded.protocol_version,      original.protocol_version,     "protocol_version mutated");
+        assert_eq!(decoded.trust_root_key,        original.trust_root_key,       "trust_root_key mutated");
+    }
+
+    /// Protocol version string must be exactly "mktd02-v2" — not an enum
+    /// variant name, not a numeric code. Verifiers parse this string.
+    #[test]
+    fn golden_protocol_version_string() {
+        let r = golden_receipt();
+        assert_eq!(r.protocol_version, "mktd02-v2",
+            "protocol_version string changed — verifiers parse this field directly");
+    }
+
+    /// receipt_id golden vector — matches zombie-core's own golden test.
+    /// canister = aaaaa-aa (empty bytes), nonce = 1.
+    #[test]
+    fn golden_receipt_id_matches_zombie_core() {
+        use zombie_core::receipt::compute_receipt_id;
+        let c = Principal::from_text("aaaaa-aa").unwrap();
+        let id = compute_receipt_id(&c, 1);
+        assert_eq!(
+            hex::encode(id),
+            "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b",
+            "receipt_id derivation changed — breaks all existing receipts"
+        );
+    }
 }

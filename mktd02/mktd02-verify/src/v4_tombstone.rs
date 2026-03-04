@@ -2,7 +2,7 @@ use anyhow::Result;
 use candid::{CandidType, Decode, Encode, Principal};
 use ic_agent::Agent;
 use serde::Deserialize;
-use crate::fetch::Receipt;
+use zombie_core::receipt::DeletionReceipt;
 
 #[derive(Debug, CandidType, Deserialize)]
 pub struct TombstoneStatus {
@@ -39,7 +39,7 @@ impl V4Result {
 pub async fn verify(
     agent: &Agent,
     canister_id: Principal,
-    receipt: &Receipt,
+    receipt: &DeletionReceipt,
 ) -> V4Result {
     let post_state = receipt.post_state_hash;
 
@@ -90,10 +90,7 @@ pub async fn verify(
     }
 }
 
-async fn query_tombstone_status(
-    agent: &Agent,
-    canister_id: Principal,
-) -> Result<TombstoneStatus> {
+async fn query_tombstone_status(agent: &Agent, canister_id: Principal) -> Result<TombstoneStatus> {
     let arg = Encode!()?;
     let response = agent
         .query(&canister_id, "mktd_get_tombstone_status")
@@ -106,10 +103,7 @@ async fn query_tombstone_status(
         .map_err(|e| anyhow::anyhow!("failed to decode tombstone status: {}", e))
 }
 
-async fn query_state_hash(
-    agent: &Agent,
-    canister_id: Principal,
-) -> Result<[u8; 32]> {
+async fn query_state_hash(agent: &Agent, canister_id: Principal) -> Result<[u8; 32]> {
     let arg = Encode!()?;
     let response = agent
         .query(&canister_id, "mktd_get_state_hash")
@@ -121,14 +115,16 @@ async fn query_state_hash(
     // Try as StateHashResponse struct (record with certificate + hash as blobs)
     if let Ok(resp) = Decode!(&response, StateHashResponse) {
         let bytes: Vec<u8> = resp.hash.into_vec();
-        return bytes.try_into()
+        return bytes
+            .try_into()
             .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
     }
 
     // Try as plain blob
     if let Ok(hash_bytes) = Decode!(&response, serde_bytes::ByteBuf) {
         let bytes: Vec<u8> = hash_bytes.into_vec();
-        return bytes.try_into()
+        return bytes
+            .try_into()
             .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
     }
 
@@ -136,7 +132,8 @@ async fn query_state_hash(
     if let Ok(hash_hex) = Decode!(&response, String) {
         let bytes = hex::decode(&hash_hex)
             .map_err(|e| anyhow::anyhow!("state hash hex decode failed: {}", e))?;
-        return bytes.try_into()
+        return bytes
+            .try_into()
             .map_err(|_| anyhow::anyhow!("state hash is not 32 bytes"));
     }
 
