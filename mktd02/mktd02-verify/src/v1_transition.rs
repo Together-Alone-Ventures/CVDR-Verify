@@ -209,7 +209,7 @@ mod tests {
             timestamp,
             nonce,
             bls_certificate:  None,
-            trust_root_key:   vec![],
+            trust_root_key_id:   String::new(),
         };
 
         let result = verify(&receipt, canister_id);

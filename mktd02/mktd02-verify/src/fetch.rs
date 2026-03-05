@@ -11,12 +11,9 @@ use zombie_core::receipt::DeletionReceipt;
 /// identical `CandidType` derive), decoding is straightforward — no manual
 /// field conversion required.
 ///
-/// # Trust root key selection
-/// `DeletionReceipt.trust_root_key` contains the raw NNS root key bytes used
-/// at finalization time. Change A will add `trust_root_key_id` to the receipt;
-/// at that point V2 verification must select the key by `trust_root_key_id`
-/// (never assume the current active key is correct for a historical receipt).
-/// TODO(Change A): implement key selection by trust_root_key_id.
+/// # Trust root key
+/// receipts carry `trust_root_key_id` (e.g. "mainnet"). V2 verification
+/// selects the key via `nns_keys::lookup_key()` — see v2_certificate.rs.
 pub async fn fetch_receipt(
     agent: &Agent,
     canister_id: Principal,
@@ -81,7 +78,7 @@ mod tests {
             timestamp:            1_000_000,
             nonce:                1,
             bls_certificate:      None,
-            trust_root_key:       vec![0u8; 96],
+            trust_root_key_id:       String::from("mainnet"),
         }
     }
 
@@ -112,7 +109,7 @@ mod tests {
         assert_eq!(decoded.timestamp,             original.timestamp,            "timestamp mutated");
         assert_eq!(decoded.nonce,                 original.nonce,                "nonce mutated");
         assert_eq!(decoded.protocol_version,      original.protocol_version,     "protocol_version mutated");
-        assert_eq!(decoded.trust_root_key,        original.trust_root_key,       "trust_root_key mutated");
+        assert_eq!(decoded.trust_root_key_id,        original.trust_root_key_id,       "trust_root_key mutated");
     }
 
     /// Protocol version string must be exactly "mktd02-v2" — not an enum
