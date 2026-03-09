@@ -50,11 +50,18 @@ Recomputes transition-linked hashes from receipt fields and checks they match re
 
 ### V2
 Verifies certified-data linkage via IC certificate path:
-- finalized receipts: embedded certificate path
-- pending receipts: live query certificate path
+- finalized receipts: embedded certificate path (primary long-term evidentiary route)
+- pending receipts: live query certificate path (secondary corroboration/fallback)
+
+Archived receipt-contained verification intentionally relaxes freshness-at-verification-time only.
+It does not relax signature authenticity, delegation trust, canister authorization, or certified-data commitment matching.
 
 ### V3
-Checks module hash consistency (with optional published WASM hash for stronger provenance comparison).
+Primary path is archival provenance:
+`module_hash` in receipt -> published build/release record -> reproducible build -> inspectable source.
+
+Secondary path is live on-chain module-hash corroboration when infrastructure still exists.
+`module_hash` is SHA-256 of the exact deployed WASM bytes, not a special ICP object with extra metadata.
 
 ### V4
 Checks tombstone persistence at verification time.
@@ -64,6 +71,9 @@ Checks tombstone persistence at verification time.
 - receipt_id is derived from `canister_id || nonce` under the protocol’s domain-tagged hash rule
 - Pending receipts may not yet include an embedded BLS certificate.
 - Finalized receipts include finalization fields used by the offline V2 path.
+- Finalized exported receipt artifacts support V1/V2 verification from file alone.
+- V3 requires published release/build provenance in addition to receipt data.
+- V4 remains live-dependent.
 
 ## Boundaries
 

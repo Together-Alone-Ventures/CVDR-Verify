@@ -27,6 +27,12 @@ For MKTd02, tooling covers V1-V4 verification paths with explicit handling for p
 These tools verify cryptographic/data-consistency properties of receipts and related on-chain evidence.  
 They do not verify adapter completeness or business-process correctness.
 
+For MKTd02, this reference layer follows an archival-first evidentiary model:
+- V2 primary: receipt-contained embedded-certificate verification for finalized receipts.
+- V2 secondary: live certified-query corroboration/fallback (not the primary long-term evidentiary route).
+- V3 primary: archival module-hash provenance against published build/release records and reproducible builds.
+- V3 secondary: live on-chain module-hash corroboration when canister infrastructure is still available.
+
 ## Disclaimer
 
 Reference tooling only. Provided under Apache-2.0 without warranty.  

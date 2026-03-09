@@ -64,13 +64,9 @@ echo "  Receipt fetched successfully."
 echo ""
 
 # --- Extract fields from Candid text output ---
-# dfx may return numeric field IDs if Candid interface isn't available.
-# Numeric IDs from Candid field name hashing:
-#   receipt_id=640_735_298  subnet_id=1_097_286_461  canister_id=1_313_628_723
-#   post_state_hash=1_590_697_147  manifest_hash=2_136_315_294
-#   deletion_event_hash=2_634_663_460  nonce=2_680_573_167  timestamp=2_781_795_542
-#   module_hash=2_928_387_969  tombstone_hash=3_300_629_176  commit_mode=3_434_561_515
-#   pre_state_hash=3_547_308_504  certified_commitment=4_249_912_749
+# dfx may return numeric field IDs if a local .did is unavailable.
+# This helper only parses the subset needed for V1 sanity + V3 + V4:
+#   pre_state_hash, post_state_hash, module_hash, nonce, timestamp
 
 # Extract a quoted hex string field by key
 extract_hex() {
