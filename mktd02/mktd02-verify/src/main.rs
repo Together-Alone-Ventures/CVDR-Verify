@@ -11,7 +11,7 @@ use candid::Principal;
 
 #[derive(Parser)]
 #[command(name = "mktd02-verify")]
-#[command(about = "Standalone V1-V4 verification for MKTd02 CVDRs")]
+#[command(about = "Reference V1-V4 verification paths for MKTd02 CVDRs")]
 struct Cli {
     /// Canister principal that holds the receipt
     #[arg(long)]
@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     println!();
 
     // Step 3: V2 — BLS certificate
-    println!("[3/5] V2: Subnet certificate verification...");
+    println!("[3/5] V2: Certificate verification path...");
     let v2 = v2_certificate::verify(&agent, canister_id, &receipt).await;
     println!("  {}", v2.summary());
     println!();
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
     println!(" CVDR Verification Summary");
     println!("============================================================");
     println!(" {:<16} : {}", "V1 (hashes)",   v1.summary());
-    println!(" {:<16} : {}", "V2 (BLS cert)", v2.summary());
+    println!(" {:<16} : {}", "V2 (cert path)", v2.summary());
     println!(" {:<16} : {}", "V3 (module)",   v3.summary());
     println!(" {:<16} : {}", "V4 (tombstone)", v4.summary());
     println!("============================================================");

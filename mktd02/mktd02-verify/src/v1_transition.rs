@@ -40,21 +40,20 @@ impl V1Result {
     }
 }
 
-/// V1 verification: independently recompute all four hash fields and compare
-/// against the receipt's stored values.
+/// V1 verification: independently recompute the transition-linked hash fields
+/// and compare against the receipt values.
 ///
-/// ## v0.2.0 formula notes
+/// ## v0.2.x formula notes
 ///
-/// `deletion_event_hash` preimage is:
-///   `TAG_EVENT || pre_state_hash || post_state_hash || timestamp_be || module_hash || nonce_be`
+/// `deletion_event_hash` preimage:
+/// `TAG_EVENT || pre_state_hash || post_state_hash || timestamp_be || module_hash || nonce_be`
 ///
-/// `manifest_hash` is NOT in the preimage for v0.2.0 receipts. It was
-/// removed in the v0.2.0 protocol upgrade. Any verifier that still includes
-/// `manifest_hash` in this formula will produce a mismatch on all v0.2.0
-/// receipts.
+/// `manifest_hash` is not part of the v0.2.x leaf-mode `deletion_event_hash`
+/// preimage (it was removed in v0.2.0). Verifiers that still include
+/// `manifest_hash` in this preimage will mismatch valid v0.2.x receipts.
 ///
-/// V1 is the only verification step sensitive to MKTd02 internal logic
-/// changes. V2–V4 remain stable across product changes.
+/// V1 is where receipt-formula alignment is most sensitive; keep this logic
+/// aligned with current MKTd02 formulas.
 pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
     let mut result = V1Result {
         tombstone_hash_ok: false,
@@ -86,7 +85,7 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
         ));
     }
 
-    // 2. deletion_event_hash — v0.2.0 formula: NO manifest_hash in preimage.
+    // 2. deletion_event_hash — v0.2.x formula: NO manifest_hash in preimage.
     //    Formula: TAG_EVENT || pre_state || post_state || timestamp_be || module_hash || nonce_be
     let expected_event = hash_with_tag(TAG_EVENT, &[
         &receipt.pre_state_hash,
@@ -99,7 +98,7 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
     if !result.deletion_event_hash_ok {
         result.details.push(format!(
             "deletion_event_hash mismatch:\n    expected: {}\n    actual:   {}\n    \
-             Note: v0.2.0 formula — manifest_hash is NOT in preimage.",
+             Note: v0.2.x formula — manifest_hash is NOT in preimage.",
             hex::encode(expected_event), hex::encode(receipt.deletion_event_hash)
         ));
     }
@@ -148,7 +147,7 @@ mod tests {
     /// pre_state=[1;32], post_state=[2;32], module_hash=[3;32],
     /// timestamp=1_000_000, nonce=1, canister=aaaaa-aa
     ///
-    /// IMPORTANT: manifest_hash is NOT present in the v0.2.0 preimage.
+    /// IMPORTANT: manifest_hash is NOT present in the v0.2.x preimage (removed in v0.2.0).
     /// The golden `deletion_event_hash` value matches zombie-core exactly.
     /// Any formula regression (e.g. re-adding manifest_hash) will break this.
     #[test]
@@ -164,12 +163,12 @@ mod tests {
         let post_state_hash = [0x02u8; 32];
         let module_hash = [0x03u8; 32];
 
-        // Compute expected hashes using v0.2.0 formulas
+        // Compute expected hashes using v0.2.x formulas
         let tombstone_constant = sha256(TOMBSTONE_SEED);
         let tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, &[
             canister_bytes, &tombstone_constant, &timestamp_bytes, &nonce_bytes,
         ]);
-        // v0.2.0: NO manifest_hash in preimage
+        // v0.2.x: NO manifest_hash in preimage
         let deletion_event_hash = hash_with_tag(TAG_EVENT, &[
             &pre_state_hash, &post_state_hash, &timestamp_bytes,
             &module_hash, &nonce_bytes,
@@ -186,7 +185,7 @@ mod tests {
         assert_eq!(
             hex::encode(deletion_event_hash),
             "9078d9a080606b46298bd9d66d3dd4a75389b04f7531b53a3a0e7c8f25955023",
-            "v0.2.0 deletion_event_hash changed — manifest_hash must NOT be in preimage"
+            "v0.2.x deletion_event_hash changed — manifest_hash must NOT be in preimage"
         );
         assert_eq!(
             hex::encode(receipt_id),
@@ -194,7 +193,7 @@ mod tests {
             "receipt_id derivation changed"
         );
 
-        // Build synthetic v0.2.0 receipt (no manifest_hash, no commit_mode)
+        // Build synthetic v0.2.x receipt (no manifest_hash, no commit_mode)
         let receipt = DeletionReceipt {
             protocol_version:     ProtocolVersion::V2.into(),
             receipt_id,

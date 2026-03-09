@@ -1,15 +1,15 @@
 #!/bin/bash
 # ============================================================
-# CVDR-Verify: MKTd02 Quick Verification Script
-# Performs V1 (partial), V3, and V4 checks using dfx.
-# V2 (BLS certificate) requires the Rust CLI.
+# CVDR-Verify: MKTd02 quick verification helper
+# Performs V1 (sanity-only), V3, and V4 checks via dfx.
+# V2 certificate-path verification is provided by the Rust CLI.
 # ============================================================
 
 set -euo pipefail
 
 # --- Argument parsing ---
 if [ $# -lt 2 ]; then
-  echo "Usage: $0 <canister-id> <receipt-id-hex> [--network ic]"
+  echo "Usage: $0 <canister-id> <receipt-id-hex> [--network <dfx-network>]"
   echo ""
   echo "  canister-id    : Principal of the canister that holds the receipt"
   echo "  receipt-id-hex : Hex-encoded receipt ID"
@@ -37,7 +37,7 @@ V3_RESULT=""
 V4_RESULT=""
 
 echo "============================================================"
-echo " CVDR-Verify: MKTd02 Quick Verification"
+echo " CVDR-Verify: MKTd02 Quick Verification Helper"
 echo " Canister : $CANISTER_ID"
 echo " Receipt  : $RECEIPT_ID"
 echo " Network  : $NETWORK"
@@ -102,7 +102,7 @@ TIMESTAMP=$(extract_num "$RECEIPT_RAW" "2_781_795_542")
 ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
 
 # --- Step 2: V1 Partial — Field Sanity Checks ---
-echo "[2/4] V1 (partial): Field sanity checks..."
+echo "[2/4] V1 (sanity-only): Field sanity checks..."
 
 V1_PASS=true
 V1_DETAILS=""
@@ -130,10 +130,10 @@ fi
 
 if [ "$V1_PASS" = true ]; then
   V1_RESULT="PASS"
-  echo "  V1 (partial): PASS — state transition fields consistent"
+  echo "  V1 (sanity-only): PASS — state transition fields look consistent"
 else
   V1_RESULT="FAIL"
-  echo "  V1 (partial): FAIL"
+  echo "  V1 (sanity-only): FAIL"
   echo -e "$V1_DETAILS"
 fi
 echo ""
@@ -236,7 +236,7 @@ echo ""
 echo "============================================================"
 echo " CVDR Verification Summary"
 echo "============================================================"
-printf " %-16s : %s\n" "V1 (partial)" "$V1_RESULT"
+printf " %-16s : %s\n" "V1 (sanity)" "$V1_RESULT"
 printf " %-16s : %s\n" "V2 (BLS cert)" "SKIPPED — requires Rust CLI"
 printf " %-16s : %s\n" "V3 (module)" "$V3_RESULT"
 printf " %-16s : %s\n" "V4 (tombstone)" "$V4_RESULT"

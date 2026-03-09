@@ -3,17 +3,15 @@ use candid::{Decode, Encode, Principal};
 use ic_agent::Agent;
 use zombie_core::receipt::DeletionReceipt;
 
-/// Fetch a CVDR receipt from the canister by hex-encoded receipt_id.
+/// Fetch a CVDR receipt from the canister by hex-encoded receipt ID.
 ///
-/// The canister's `mktd_get_receipt` endpoint returns
-/// `Option<DeletionReceipt>` encoded in Candid. Because both the canister
-/// and this tool now depend on `zombie_core::receipt::DeletionReceipt` (with
-/// identical `CandidType` derive), decoding is straightforward — no manual
-/// field conversion required.
+/// The canister returns `Option<DeletionReceipt>` in Candid. This verifier
+/// first attempts optional decode, then falls back to direct decode for
+/// compatibility with endpoint/interface variation.
 ///
-/// # Trust root key
-/// receipts carry `trust_root_key_id` (e.g. "mainnet"). V2 verification
-/// selects the key via `nns_keys::lookup_key()` — see v2_certificate.rs.
+/// ## Trust root key note
+/// Receipts include `trust_root_key_id` used by V2 certificate-path checks.
+/// Pending receipts may carry an empty key id until finalization data exists.
 pub async fn fetch_receipt(
     agent: &Agent,
     canister_id: Principal,
@@ -39,7 +37,7 @@ pub async fn fetch_receipt(
     }
 
     Err(anyhow!(
-        "Failed to decode receipt from canister {} — check Candid interface matches zombie-core v0.2.0+",
+        "Failed to decode receipt from canister {} — check Candid interface compatibility with current zombie-core/MKTd02 receipt types",
         canister_id
     ))
 }

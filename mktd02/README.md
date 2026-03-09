@@ -1,37 +1,38 @@
 # MKTd02 Verification Tools
 
-Standalone tools for verifying Cryptographically Verifiable Deletion Receipts (CVDRs) produced by [MKTd02](https://github.com/Together-Alone-Ventures/MKTd02), the ICP Leaf-mode deletion receipt library.
+Standalone tools for verifying Cryptographically Verifiable Deletion Receipts (CVDRs) produced by [MKTd02](https://github.com/Together-Alone-Ventures/MKTd02).
 
-**Targets MKTd02 library version:** 0.1.0 (see MKTd02 repo for current commit)
+CVDR-Verify is the reference verification layer.  
+This `mktd02/` directory contains the MKTd02-specific verifier entry points aligned to the current v0.2.x leaf-mode receipt shape.
 
-## Two Tools
+## Scope
 
-| Tool | Covers | Requires |
-|------|--------|----------|
-| `verify-quick.sh` | V1 (partial), V3, V4 | `dfx` CLI + `jq` |
-| `mktd02-verify` (Rust CLI) | V1, V2, V3, V4 (full) | Rust toolchain |
+- Verifies receipt integrity and on-chain evidence through V1-V4 verification paths.
+- Supports both pending receipts (no embedded certificate yet) and finalized receipts (embedded certificate present).
+- Does not perform deletion, finalization orchestration, or adapter/business-logic validation.
 
-## Quick Start: Shell Script
+## Quick Start
+
 ```bash
-# Against mainnet
+# Mainnet
 ./verify-quick.sh <canister-id> <receipt-id-hex> --network ic
 
-# Against local replica
+# Local replica
 ./verify-quick.sh <canister-id> <receipt-id-hex>
 ```
 
-## Quick Start: Rust CLI
 ```bash
+# Rust CLI (from this directory)
 cd mktd02-verify
 cargo build --release
 
-# Against mainnet
+# Mainnet
 cargo run --release -- \
   --canister <canister-id> \
   --receipt-id <receipt-id-hex> \
   --network https://ic0.app
 
-# With published WASM hash for full V3 provenance check
+# Optional published WASM hash for stronger V3 provenance comparison
 cargo run --release -- \
   --canister <canister-id> \
   --receipt-id <receipt-id-hex> \
@@ -39,41 +40,36 @@ cargo run --release -- \
   --wasm-hash <64-char-hex>
 ```
 
-## What V1–V4 Verify
+## Verification Paths
 
-### V1: State Transition Verification
+- `verify-quick.sh`: V1 (sanity-only), V3, V4
+- `mktd02-verify` (Rust CLI): V1, V2, V3, V4
 
-Confirms the receipt is internally consistent. The tool independently recomputes four cryptographic hashes from the receipt's raw fields using the published formulas, and checks they match the values in the receipt. If all four match, the receipt has not been tampered with and the state transition it describes is mathematically consistent.
+### V1
+Recomputes transition-linked hashes from receipt fields and checks they match receipt values.
 
-### V2: Subnet Certificate Verification
+### V2
+Verifies certified-data linkage via IC certificate path:
+- finalized receipts: embedded certificate path
+- pending receipts: live query certificate path
 
-Confirms the Internet Computer's subnet vouches for the deletion. The tool retrieves a BLS certificate from the canister and verifies the cryptographic signature chain back to the ICP root of trust. This proves that at least two-thirds of the subnet's nodes attested to the post-deletion state — it is not just the data controller's claim.
+### V3
+Checks module hash consistency (with optional published WASM hash for stronger provenance comparison).
 
-### V3: Module Hash Verification
+### V4
+Checks tombstone persistence at verification time.
 
-Confirms which code was running when the deletion occurred. The tool compares the canister's current code hash against the hash recorded in the receipt. Three outcomes are possible:
+## Receipt Notes
 
-- **MATCH** — the canister code has not changed since deletion.
-- **MISMATCH-EXPECTED** — the canister has been upgraded (normal for maintained software). The receipt remains valid evidence of what happened under the prior code version.
-- **MISMATCH-SUSPICIOUS** — the receipt was generated with development zeros. Code provenance cannot be verified.
+- receipt_id is derived from `canister_id || nonce` under the protocol’s domain-tagged hash rule
+- Pending receipts may not yet include an embedded BLS certificate.
+- Finalized receipts include finalization fields used by the offline V2 path.
 
-If you supply `--wasm-hash` (from a published deterministic build), the tool performs a three-way comparison for end-to-end provenance confirmation.
+## Boundaries
 
-### V4: Tombstone Persistence Check
-
-Confirms the deletion has not been reversed. The tool queries the canister's current tombstone status and state hash, and checks they match the post-deletion values in the receipt. This is a point-in-time check — it confirms the tombstone is intact right now, not that it will remain so.
-
-## What These Tools Cannot Verify
-
-**RT3: Adapter honesty.** The tools verify that a state transition occurred and that it is cryptographically consistent with the receipt. They cannot verify that the enterprise's adapter correctly declared all PII fields. If the adapter omitted a PII field, that field would survive tombstoning and no external tool can detect this. Confirming adapter correctness requires source code audit of the enterprise's `MKTdDataSource` implementation.
-
-For the full residual trust analysis, see the [MKTd02 README](https://github.com/Together-Alone-Ventures/MKTd02) or the Zombie Delete Configurations spreadsheet.
-
-## Cryptographic Specification
-
-All hash formulas, domain separation tags, and encoding rules are published in the [MKTd02 repository](https://github.com/Together-Alone-Ventures/MKTd02). The Rust CLI uses `zombie-core` (the same hashing library used by MKTd02 itself) to ensure identical hash computation — no reimplementation, no drift.
-
-Anyone who wishes to verify the tool itself can audit `zombie-core`'s 7 hash formulas against the published specification, or reimplement them independently.
+- Canonical protocol/integration semantics: MKTd02 repo
+- Reference verification implementation: CVDR-Verify repo
+- Worked product example/integration template: DaffyDefs repo
 
 ## Licence
 

@@ -30,29 +30,25 @@ impl V2Result {
     }
 }
 
-/// Verify V2: BLS certificate chain + certified data match.
+/// Verify V2: certificate path + certified_data commitment match.
 ///
-/// ## Paths
+/// ## Receipt context paths
 ///
-/// - **Offline** (receipt finalized, `bls_certificate` is Some): parse
-///   the embedded certificate and verify against the known NNS root key.
-///   No network call required.
+/// - **Finalized receipt path** (`bls_certificate` is `Some`):
+///   parse and verify the embedded certificate, then check certified_data.
 ///
-/// - **Online** (receipt pending, `bls_certificate` is None): live query
-///   to `mktd_get_state_hash` to obtain the certificate from the IC runtime.
-///   Requires the canister to be reachable.
+/// - **Pending receipt path** (`bls_certificate` is `None`):
+///   query `mktd_get_state_hash` to obtain a live certificate, then check
+///   certified_data.
 ///
-/// In both paths, `trust_root_key_id` is validated against zombie-core's
-/// allowlist before any verification is attempted.
+/// In both paths, this verifier checks `trust_root_key_id` against the
+/// zombie-core key allowlist when applicable.
 ///
-/// ## Key rotation
+/// ## Rotation/status note
 ///
-/// The offline path currently verifies using the agent's configured root key
-/// (ic-agent default: ICP mainnet). For receipts issued under a future rotated
-/// key, the verifier binary must be rebuilt pointing at the new key, OR
-/// ic-agent must gain an explicit-key verification API. A TODO is placed at
-/// the verification call site. The trust_root_key_id field ensures receipts
-/// are self-describing — the infrastructure is ready for full rotation support.
+/// This verifier supports current V2 verification paths used by MKTd02.
+/// Key-rotation handling remains constrained by current ic-agent verification
+/// interfaces; comments at the call site describe the remaining limitation.
 pub async fn verify(
     agent: &Agent,
     canister_id: Principal,
@@ -95,7 +91,7 @@ pub async fn verify(
         }
     }
 
-    // --- Branch on receipt finalization status ---
+    // --- Branch by receipt context: finalized vs pending ---
     if let Some(cert_bytes) = &receipt.bls_certificate {
         // Offline path: finalized receipt with embedded certificate
         verify_from_embedded_cert(cert_bytes, agent, canister_id, &receipt.certified_commitment)
