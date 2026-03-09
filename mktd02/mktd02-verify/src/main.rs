@@ -13,13 +13,17 @@ use candid::Principal;
 #[command(name = "mktd02-verify")]
 #[command(about = "Reference V1-V4 verification paths for MKTd02 CVDRs")]
 struct Cli {
-    /// Canister principal that holds the receipt
+    /// Canister principal that holds the receipt (network-fetch mode)
     #[arg(long)]
-    canister: String,
+    canister: Option<String>,
 
-    /// Hex-encoded receipt ID
+    /// Hex-encoded receipt ID (network-fetch mode)
     #[arg(long)]
-    receipt_id: String,
+    receipt_id: Option<String>,
+
+    /// Local receipt JSON file (DaffyDefs export shape)
+    #[arg(long)]
+    receipt_file: Option<String>,
 
     /// IC network URL
     #[arg(long, default_value = "https://ic0.app")]
@@ -34,8 +38,18 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let canister_id = Principal::from_text(&cli.canister)
-        .map_err(|e| anyhow::anyhow!("Invalid canister ID: {}", e))?;
+    let using_file_mode = cli.receipt_file.is_some();
+    if using_file_mode {
+        if cli.canister.is_some() || cli.receipt_id.is_some() {
+            return Err(anyhow::anyhow!(
+                "--receipt-file is mutually exclusive with --canister/--receipt-id"
+            ));
+        }
+    } else if cli.canister.is_none() || cli.receipt_id.is_none() {
+        return Err(anyhow::anyhow!(
+            "network-fetch mode requires both --canister and --receipt-id"
+        ));
+    }
 
     let published_hash: Option<[u8; 32]> = match &cli.wasm_hash {
         Some(h) => {
@@ -53,24 +67,43 @@ async fn main() -> Result<()> {
         .with_url(&cli.network)
         .build()?;
 
-    // Fetch root key for non-mainnet (local replica)
-    if cli.network != "https://ic0.app" && cli.network != "https://icp0.io" {
+    // Keep eager root-key fetch for network-fetch mode. In --receipt-file mode,
+    // run receipt-contained checks first and let live-dependent checks fail explicitly.
+    if cli.receipt_file.is_none() && cli.network != "https://ic0.app" && cli.network != "https://icp0.io" {
         agent.fetch_root_key().await?;
     }
 
+    let (canister_id, receipt, receipt_id_display, source_display) = if let Some(path) = &cli.receipt_file {
+        let receipt = fetch::load_receipt_from_file(path)?;
+        let canister_id = receipt.canister_id;
+        let receipt_id_display = hex::encode(receipt.receipt_id);
+        (canister_id, receipt, receipt_id_display, format!("file:{}", path))
+    } else {
+        let canister_text = cli.canister.as_ref().expect("validated above");
+        let receipt_id_text = cli.receipt_id.as_ref().expect("validated above");
+        let canister_id = Principal::from_text(canister_text)
+            .map_err(|e| anyhow::anyhow!("Invalid canister ID: {}", e))?;
+        let receipt = fetch::fetch_receipt(&agent, canister_id, receipt_id_text).await?;
+        (
+            canister_id,
+            receipt,
+            receipt_id_text.clone(),
+            "network-fetch".to_string(),
+        )
+    };
+
     println!("============================================================");
     println!(" CVDR-Verify: MKTd02 Full Verification (V1-V4)");
-    println!(" Canister : {}", cli.canister);
-    println!(" Receipt  : {}", cli.receipt_id);
+    println!(" Canister : {}", canister_id);
+    println!(" Receipt  : {}", receipt_id_display);
+    println!(" Source   : {}", source_display);
     println!(" Network  : {}", cli.network);
     println!("============================================================");
     println!();
 
-    // Step 1: Fetch receipt
-    println!("[1/5] Fetching receipt...");
-    let receipt = fetch::fetch_receipt(&agent, canister_id, &cli.receipt_id).await?;
+    println!("[1/5] Receipt load...");
     println!("  protocol_version : {}", receipt.protocol_version);
-    println!("  Receipt fetched successfully.");
+    println!("  Receipt loaded successfully.");
     println!();
 
     // Step 2: V1 — Hash recomputation
@@ -79,10 +112,13 @@ async fn main() -> Result<()> {
     println!("  {}", v1.summary());
     println!();
 
-    // Step 3: V2 — BLS certificate
+    // Step 3: V2 — Certificate path
     println!("[3/5] V2: Certificate verification path...");
     let v2 = v2_certificate::verify(&agent, canister_id, &receipt).await;
     println!("  {}", v2.summary());
+    for note in &v2.notes {
+        println!("    {}", note);
+    }
     println!();
 
     // Step 4: V3 — Module hash

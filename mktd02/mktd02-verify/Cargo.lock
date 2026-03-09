@@ -1258,9 +1258,11 @@ dependencies = [
  "clap",
  "hex",
  "ic-agent",
+ "ic-verify-bls-signature",
  "serde",
  "serde_bytes",
  "serde_cbor",
+ "serde_json",
  "tokio",
  "zombie-core",
 ]
