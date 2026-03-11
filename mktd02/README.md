@@ -3,7 +3,7 @@
 Standalone tools for verifying Cryptographically Verifiable Deletion Receipts (CVDRs) produced by [MKTd02](https://github.com/Together-Alone-Ventures/MKTd02).
 
 CVDR-Verify is the reference verification layer.  
-This `mktd02/` directory contains the MKTd02-specific verifier entry points aligned to the current v0.2.x leaf-mode receipt shape.
+This `mktd02/` directory contains the MKTd02-specific verifier entry points aligned to current v0.2.x/v0.3.x leaf-mode receipt lines (`mktd02-v2` and `mktd02-v3`).
 
 ## Scope
 
@@ -68,7 +68,13 @@ Checks tombstone persistence at verification time.
 
 ## Receipt Notes
 
-- receipt_id is derived from `canister_id || nonce` under the protocol’s domain-tagged hash rule
+- `protocol_version` may be `mktd02-v2` (legacy) or `mktd02-v3` (current line)
+- `receipt_id` is protocol-version dependent:
+  - v2 legacy: derived from `canister_id || nonce` under the v2 domain-tagged rule
+  - v3: derived from `canister_id`, `record_id`, and `deletion_seq` under the v3 length-delimited domain-tagged rule
+- `deletion_seq` is the runtime counter field used by the verifier; for legacy v2 receipts it carries v2 nonce-equivalent semantics
+- v3 receipts do not carry receipt-level `subnet_id`
+- CLI output prints `record_id` as hex (with byte length) when present/relevant (notably v3)
 - Pending receipts may not yet include an embedded BLS certificate.
 - Finalized receipts include finalization fields used by the offline V2 path.
 - Finalized exported receipt artifacts support V1/V2 verification from file alone.

@@ -103,6 +103,27 @@ async fn main() -> Result<()> {
 
     println!("[1/5] Receipt load...");
     println!("  protocol_version : {}", receipt.protocol_version);
+    println!("  deletion_seq     : {}", receipt.deletion_seq);
+    match receipt.protocol_version.as_str() {
+        "mktd02-v2" => {
+            println!("  receipt line     : v2 (legacy nonce semantics on-wire)");
+        }
+        "mktd02-v3" => {
+            println!(
+                "  record_id        : {} bytes ({})",
+                receipt.record_id.len(),
+                hex::encode(&receipt.record_id)
+            );
+        }
+        _ => {
+            println!(
+                "  record_id        : {} bytes ({})",
+                receipt.record_id.len(),
+                hex::encode(&receipt.record_id)
+            );
+            println!("  receipt line     : unknown protocol_version");
+        }
+    }
     println!("  Receipt loaded successfully.");
     println!();
 

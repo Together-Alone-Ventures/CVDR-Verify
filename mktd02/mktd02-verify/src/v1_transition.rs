@@ -1,10 +1,10 @@
 use candid::Principal;
 use zombie_core::hashing::{
     sha256, hash_with_tag,
-    TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED, TAG_RECEIPT,
+    TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED,
     TOMBSTONE_SEED,
 };
-use zombie_core::receipt::DeletionReceipt;
+use zombie_core::receipt::{compute_receipt_id, compute_receipt_id_v2, DeletionReceipt};
 
 pub struct V1Result {
     pub tombstone_hash_ok: bool,
@@ -65,7 +65,7 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
 
     let canister_bytes = canister_id.as_slice();
     let timestamp_bytes = receipt.timestamp.to_be_bytes();
-    let nonce_bytes = receipt.nonce.to_be_bytes();
+    let deletion_seq_bytes = receipt.deletion_seq.to_be_bytes();
 
     // TOMBSTONE_CONSTANT = SHA-256("MKTD_TOMBSTONE_V1")
     let tombstone_constant = sha256(TOMBSTONE_SEED);
@@ -75,7 +75,7 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
         canister_bytes,
         &tombstone_constant,
         &timestamp_bytes,
-        &nonce_bytes,
+        &deletion_seq_bytes,
     ]);
     result.tombstone_hash_ok = receipt.tombstone_hash == expected_tombstone;
     if !result.tombstone_hash_ok {
@@ -86,13 +86,13 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
     }
 
     // 2. deletion_event_hash — v0.2.x formula: NO manifest_hash in preimage.
-    //    Formula: TAG_EVENT || pre_state || post_state || timestamp_be || module_hash || nonce_be
+    //    Formula: TAG_EVENT || pre_state || post_state || timestamp_be || module_hash || deletion_seq_be
     let expected_event = hash_with_tag(TAG_EVENT, &[
         &receipt.pre_state_hash,
         &receipt.post_state_hash,
         &timestamp_bytes,
         &receipt.module_hash,
-        &nonce_bytes,
+        &deletion_seq_bytes,
     ]);
     result.deletion_event_hash_ok = receipt.deletion_event_hash == expected_event;
     if !result.deletion_event_hash_ok {
@@ -116,12 +116,20 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
         ));
     }
 
-    // 4. receipt_id = hash_with_tag(TAG_RECEIPT, canister_id || nonce)
-    //    No timestamp in preimage — matches zombie_core::receipt::compute_receipt_id()
-    let expected_id = hash_with_tag(TAG_RECEIPT, &[
-        canister_bytes,
-        &nonce_bytes,
-    ]);
+    // 4. receipt_id is protocol-version dependent:
+    //    - v2: legacy formula (canister_id || nonce_be under TAG_RECEIPT)
+    //    - v3: length-delimited formula with record_id + deletion_seq under TAG_RECEIPT_V3
+    let expected_id = match receipt.protocol_version.as_str() {
+        "mktd02-v2" => compute_receipt_id_v2(&canister_id, receipt.deletion_seq),
+        "mktd02-v3" => compute_receipt_id(&canister_id, &receipt.record_id, receipt.deletion_seq),
+        other => {
+            result.details.push(format!(
+                "unsupported protocol_version for receipt_id verification: {}",
+                other
+            ));
+            [0u8; 32]
+        }
+    };
     result.receipt_id_ok = receipt.receipt_id == expected_id;
     if !result.receipt_id_ok {
         result.details.push(format!(
@@ -137,8 +145,8 @@ pub fn verify(receipt: &DeletionReceipt, canister_id: Principal) -> V1Result {
 mod tests {
     use super::*;
     use zombie_core::receipt::ProtocolVersion;
-    use zombie_core::hashing::{sha256, hash_with_tag, TOMBSTONE_SEED,
-        TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED, TAG_RECEIPT};
+    use zombie_core::hashing::{sha256, hash_with_tag, TOMBSTONE_SEED, TAG_TOMBSTONE_HASH, TAG_EVENT, TAG_CERTIFIED};
+    use zombie_core::receipt::{compute_receipt_id, compute_receipt_id_v2};
 
     /// Golden vector test: uses identical inputs to zombie-core's own
     /// `golden_deletion_event_hash_v2` test so expected hash values are
@@ -155,9 +163,9 @@ mod tests {
         let canister_id = Principal::from_text("aaaaa-aa").unwrap();
         let canister_bytes = canister_id.as_slice();
         let timestamp: u64 = 1_000_000;
-        let nonce: u64 = 1;
+        let deletion_seq: u64 = 1;
         let timestamp_bytes = timestamp.to_be_bytes();
-        let nonce_bytes = nonce.to_be_bytes();
+        let deletion_seq_bytes = deletion_seq.to_be_bytes();
 
         let pre_state_hash = [0x01u8; 32];
         let post_state_hash = [0x02u8; 32];
@@ -166,19 +174,17 @@ mod tests {
         // Compute expected hashes using v0.2.x formulas
         let tombstone_constant = sha256(TOMBSTONE_SEED);
         let tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, &[
-            canister_bytes, &tombstone_constant, &timestamp_bytes, &nonce_bytes,
+            canister_bytes, &tombstone_constant, &timestamp_bytes, &deletion_seq_bytes,
         ]);
         // v0.2.x: NO manifest_hash in preimage
         let deletion_event_hash = hash_with_tag(TAG_EVENT, &[
             &pre_state_hash, &post_state_hash, &timestamp_bytes,
-            &module_hash, &nonce_bytes,
+            &module_hash, &deletion_seq_bytes,
         ]);
         let certified_commitment = hash_with_tag(TAG_CERTIFIED, &[
             &post_state_hash, &deletion_event_hash,
         ]);
-        let receipt_id = hash_with_tag(TAG_RECEIPT, &[
-            canister_bytes, &nonce_bytes,
-        ]);
+        let receipt_id = compute_receipt_id_v2(&canister_id, deletion_seq);
 
         // Lock down exact values.
         // deletion_event_hash matches zombie-core golden_deletion_event_hash_v2.
@@ -198,7 +204,7 @@ mod tests {
             protocol_version:     ProtocolVersion::V2.into(),
             receipt_id,
             canister_id,
-            subnet_id:            Principal::from_text("2vxsx-fae").unwrap(),
+            record_id:            Vec::new(),
             pre_state_hash,
             post_state_hash,
             tombstone_hash,
@@ -206,9 +212,61 @@ mod tests {
             certified_commitment,
             module_hash,
             timestamp,
-            nonce,
+            deletion_seq,
             bls_certificate:  None,
             trust_root_key_id:   String::new(),
+        };
+
+        let result = verify(&receipt, canister_id);
+        assert!(result.tombstone_hash_ok,        "tombstone_hash mismatch: {:?}", result.details);
+        assert!(result.deletion_event_hash_ok,   "deletion_event_hash mismatch: {:?}", result.details);
+        assert!(result.certified_commitment_ok,  "certified_commitment mismatch: {:?}", result.details);
+        assert!(result.receipt_id_ok,            "receipt_id mismatch: {:?}", result.details);
+        assert!(result.passed(),                 "V1 should pass: {:?}", result.details);
+    }
+
+    #[test]
+    fn golden_v1_full_verification_v3() {
+        let canister_id = Principal::from_text("aaaaa-aa").unwrap();
+        let canister_bytes = canister_id.as_slice();
+        let timestamp: u64 = 1_000_000;
+        let deletion_seq: u64 = 2;
+        let timestamp_bytes = timestamp.to_be_bytes();
+        let deletion_seq_bytes = deletion_seq.to_be_bytes();
+
+        let pre_state_hash = [0x11u8; 32];
+        let post_state_hash = [0x22u8; 32];
+        let module_hash = [0x33u8; 32];
+        let record_id = canister_id.as_slice().to_vec();
+
+        let tombstone_constant = sha256(TOMBSTONE_SEED);
+        let tombstone_hash = hash_with_tag(TAG_TOMBSTONE_HASH, &[
+            canister_bytes, &tombstone_constant, &timestamp_bytes, &deletion_seq_bytes,
+        ]);
+        let deletion_event_hash = hash_with_tag(TAG_EVENT, &[
+            &pre_state_hash, &post_state_hash, &timestamp_bytes,
+            &module_hash, &deletion_seq_bytes,
+        ]);
+        let certified_commitment = hash_with_tag(TAG_CERTIFIED, &[
+            &post_state_hash, &deletion_event_hash,
+        ]);
+        let receipt_id = compute_receipt_id(&canister_id, &record_id, deletion_seq);
+
+        let receipt = DeletionReceipt {
+            protocol_version: ProtocolVersion::V3.into(),
+            receipt_id,
+            canister_id,
+            record_id,
+            pre_state_hash,
+            post_state_hash,
+            tombstone_hash,
+            deletion_event_hash,
+            certified_commitment,
+            module_hash,
+            timestamp,
+            deletion_seq,
+            bls_certificate: None,
+            trust_root_key_id: String::new(),
         };
 
         let result = verify(&receipt, canister_id);

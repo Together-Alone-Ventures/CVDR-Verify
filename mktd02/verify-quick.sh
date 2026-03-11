@@ -1,7 +1,8 @@
 #!/bin/bash
 # ============================================================
 # CVDR-Verify: MKTd02 quick verification helper
-# Performs V1 (sanity-only), V3, and V4 checks via dfx.
+# Performs V1 (sanity-only), V3, and V4 checks via dfx for
+# both mktd02-v2 and mktd02-v3 receipts.
 # V2 certificate-path verification is provided by the Rust CLI.
 # ============================================================
 
@@ -66,7 +67,10 @@ echo ""
 # --- Extract fields from Candid text output ---
 # dfx may return numeric field IDs if a local .did is unavailable.
 # This helper only parses the subset needed for V1 sanity + V3 + V4:
-#   pre_state_hash, post_state_hash, module_hash, nonce, timestamp
+#   protocol_version, pre_state_hash, post_state_hash, module_hash,
+#   deletion_seq (v2 fallback: nonce), timestamp
+# record_id is supported by the Rust CLI path and is not required for this
+# quick helper's V1-sanity/V3/V4 checks.
 
 # Extract a quoted hex string field by key
 extract_hex() {
@@ -90,8 +94,10 @@ POST_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "1_590_697_147")
 [ -z "$POST_STATE_HASH" ] && POST_STATE_HASH=$(extract_hex "$RECEIPT_RAW" "post_state_hash")
 MODULE_HASH=$(extract_hex "$RECEIPT_RAW" "2_928_387_969")
 [ -z "$MODULE_HASH" ] && MODULE_HASH=$(extract_hex "$RECEIPT_RAW" "module_hash")
-NONCE=$(extract_num "$RECEIPT_RAW" "2_680_573_167")
-[ -z "$NONCE" ] && NONCE=$(extract_num "$RECEIPT_RAW" "nonce")
+PROTOCOL_VERSION=$(echo "$RECEIPT_RAW" | grep -oP 'protocol_version\s*=\s*"\K[^"]+' | head -1 || echo "")
+DELETION_SEQ=$(extract_num "$RECEIPT_RAW" "2_680_573_167")
+[ -z "$DELETION_SEQ" ] && DELETION_SEQ=$(extract_num "$RECEIPT_RAW" "deletion_seq")
+[ -z "$DELETION_SEQ" ] && DELETION_SEQ=$(extract_num "$RECEIPT_RAW" "nonce")
 TIMESTAMP=$(extract_num "$RECEIPT_RAW" "2_781_795_542")
 [ -z "$TIMESTAMP" ] && TIMESTAMP=$(extract_num "$RECEIPT_RAW" "timestamp")
 
@@ -99,6 +105,9 @@ ZEROS="0000000000000000000000000000000000000000000000000000000000000000"
 
 # --- Step 2: V1 Partial — Field Sanity Checks ---
 echo "[2/4] V1 (sanity-only): Field sanity checks..."
+if [ -n "$PROTOCOL_VERSION" ]; then
+  echo "  protocol_version: $PROTOCOL_VERSION"
+fi
 
 V1_PASS=true
 V1_DETAILS=""
@@ -114,9 +123,9 @@ elif [ "$PRE_STATE_HASH" = "$ZEROS" ]; then
   V1_DETAILS="  FAIL: pre_state_hash is all zeros (uninitialised)"
 fi
 
-if [ -z "$NONCE" ] || [ "$NONCE" -le 0 ] 2>/dev/null; then
+if [ -z "$DELETION_SEQ" ] || [ "$DELETION_SEQ" -le 0 ] 2>/dev/null; then
   V1_PASS=false
-  V1_DETAILS="${V1_DETAILS}\n  FAIL: nonce is zero or missing"
+  V1_DETAILS="${V1_DETAILS}\n  FAIL: deletion_seq is zero or missing (v2 fallback key: nonce)"
 fi
 
 if [ -z "$TIMESTAMP" ] || [ "$TIMESTAMP" -le 0 ] 2>/dev/null; then

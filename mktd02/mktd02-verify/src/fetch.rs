@@ -31,13 +31,13 @@ pub async fn fetch_receipt(
 
     // Primary: canister returns opt DeletionReceipt
     if let Ok(Some(receipt)) = Decode!(&response, Option<DeletionReceipt>) {
-        validate_v2_fields(&receipt, canister_id)?;
+        validate_receipt_fields(&receipt, canister_id)?;
         return Ok(receipt);
     }
 
     // Fallback: try direct (non-optional) decode
     if let Ok(receipt) = Decode!(&response, DeletionReceipt) {
-        validate_v2_fields(&receipt, canister_id)?;
+        validate_receipt_fields(&receipt, canister_id)?;
         return Ok(receipt);
     }
 
@@ -48,7 +48,7 @@ pub async fn fetch_receipt(
 }
 
 #[derive(Debug, Deserialize)]
-struct FileReceipt {
+struct FileReceiptV2 {
     protocol_version: String,
     receipt_id: String,
     canister_id: String,
@@ -69,6 +69,37 @@ struct FileReceipt {
     profile_canister: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct FileReceiptV3 {
+    protocol_version: String,
+    receipt_id: String,
+    canister_id: String,
+    /// Assumed v3 JSON shape: byte array (primary), with hex-string fallback.
+    /// This avoids silently hard-locking a single unconfirmed export encoding.
+    record_id: Value,
+    pre_state_hash: String,
+    post_state_hash: String,
+    tombstone_hash: String,
+    deletion_event_hash: String,
+    certified_commitment: String,
+    module_hash: String,
+    timestamp: Value,
+    deletion_seq: Value,
+    #[serde(default)]
+    bls_certificate: Option<Vec<u8>>,
+    #[serde(default)]
+    trust_root_key_id: Option<String>,
+    #[serde(default)]
+    profile_canister: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum FileReceipt {
+    V3(FileReceiptV3),
+    V2(FileReceiptV2),
+}
+
 /// Load a DaffyDefs-exported receipt JSON file and map it into DeletionReceipt.
 pub fn load_receipt_from_file(path: &str) -> Result<DeletionReceipt> {
     let raw = fs::read_to_string(path)
@@ -76,18 +107,77 @@ pub fn load_receipt_from_file(path: &str) -> Result<DeletionReceipt> {
     let wire: FileReceipt = serde_json::from_str(&raw)
         .map_err(|e| anyhow!("Failed to parse receipt JSON '{}': {}", path, e))?;
 
-    if let Some(profile_canister) = wire.profile_canister.as_deref() {
-        if profile_canister == wire.canister_id {
+    let (
+        protocol_version,
+        receipt_id_hex,
+        canister_id_text,
+        record_id,
+        pre_state_hash,
+        post_state_hash,
+        tombstone_hash,
+        deletion_event_hash,
+        certified_commitment,
+        module_hash,
+        timestamp,
+        deletion_seq,
+        bls_certificate,
+        trust_root_key_id_opt,
+        profile_canister,
+    ) = match wire {
+        FileReceipt::V2(v2) => {
+            let _ = Principal::from_text(&v2.subnet_id)
+                .map_err(|e| anyhow!("Invalid subnet_id in v2 receipt file: {}", e))?;
+            (
+                v2.protocol_version,
+                v2.receipt_id,
+                v2.canister_id,
+                Vec::new(),
+                v2.pre_state_hash,
+                v2.post_state_hash,
+                v2.tombstone_hash,
+                v2.deletion_event_hash,
+                v2.certified_commitment,
+                v2.module_hash,
+                v2.timestamp,
+                v2.nonce,
+                v2.bls_certificate,
+                v2.trust_root_key_id,
+                v2.profile_canister,
+            )
+        }
+        FileReceipt::V3(v3) => (
+            v3.protocol_version,
+            v3.receipt_id,
+            v3.canister_id,
+            parse_record_id_field(&v3.record_id)?,
+            v3.pre_state_hash,
+            v3.post_state_hash,
+            v3.tombstone_hash,
+            v3.deletion_event_hash,
+            v3.certified_commitment,
+            v3.module_hash,
+            v3.timestamp,
+            v3.deletion_seq,
+            v3.bls_certificate,
+            v3.trust_root_key_id,
+            v3.profile_canister,
+        ),
+    };
+
+    validate_protocol_version(&protocol_version)?;
+
+    if let Some(profile_canister) = profile_canister.as_deref() {
+        if profile_canister == canister_id_text {
             eprintln!(
                 "Note: canister_id matches profile_canister (expected in Leaf mode)."
             );
         }
     }
 
-    let trust_root_key_id = match wire.trust_root_key_id {
+    let trust_root_key_id = match trust_root_key_id_opt {
         Some(v) => v,
         None => {
-            if wire.bls_certificate.is_some() {
+            if bls_certificate.is_some() {
                 return Err(anyhow!(
                     "Finalized receipt file has bls_certificate but missing trust_root_key_id"
                 ));
@@ -96,34 +186,33 @@ pub fn load_receipt_from_file(path: &str) -> Result<DeletionReceipt> {
         }
     };
 
-    if wire.bls_certificate.is_some() && trust_root_key_id.trim().is_empty() {
+    if bls_certificate.is_some() && trust_root_key_id.trim().is_empty() {
         return Err(anyhow!(
             "Finalized receipt file has bls_certificate but empty trust_root_key_id"
         ));
     }
 
-    let canister_id = Principal::from_text(&wire.canister_id)
+    let canister_id = Principal::from_text(&canister_id_text)
         .map_err(|e| anyhow!("Invalid canister_id in receipt file: {}", e))?;
 
     let receipt = DeletionReceipt {
-        protocol_version: wire.protocol_version,
-        receipt_id: decode_hex32("receipt_id", &wire.receipt_id)?,
+        protocol_version,
+        receipt_id: decode_hex32("receipt_id", &receipt_id_hex)?,
         canister_id,
-        subnet_id: Principal::from_text(&wire.subnet_id)
-            .map_err(|e| anyhow!("Invalid subnet_id in receipt file: {}", e))?,
-        pre_state_hash: decode_hex32("pre_state_hash", &wire.pre_state_hash)?,
-        post_state_hash: decode_hex32("post_state_hash", &wire.post_state_hash)?,
-        tombstone_hash: decode_hex32("tombstone_hash", &wire.tombstone_hash)?,
-        deletion_event_hash: decode_hex32("deletion_event_hash", &wire.deletion_event_hash)?,
-        certified_commitment: decode_hex32("certified_commitment", &wire.certified_commitment)?,
-        module_hash: decode_hex32("module_hash", &wire.module_hash)?,
-        timestamp: parse_u64_field("timestamp", &wire.timestamp)?,
-        nonce: parse_u64_field("nonce", &wire.nonce)?,
-        bls_certificate: wire.bls_certificate,
+        record_id,
+        pre_state_hash: decode_hex32("pre_state_hash", &pre_state_hash)?,
+        post_state_hash: decode_hex32("post_state_hash", &post_state_hash)?,
+        tombstone_hash: decode_hex32("tombstone_hash", &tombstone_hash)?,
+        deletion_event_hash: decode_hex32("deletion_event_hash", &deletion_event_hash)?,
+        certified_commitment: decode_hex32("certified_commitment", &certified_commitment)?,
+        module_hash: decode_hex32("module_hash", &module_hash)?,
+        timestamp: parse_u64_field("timestamp", &timestamp)?,
+        deletion_seq: parse_u64_field("deletion_seq", &deletion_seq)?,
+        bls_certificate,
         trust_root_key_id,
     };
 
-    validate_v2_fields(&receipt, receipt.canister_id)?;
+    validate_receipt_fields(&receipt, receipt.canister_id)?;
     Ok(receipt)
 }
 
@@ -139,6 +228,33 @@ fn parse_u64_field(name: &str, value: &Value) -> Result<u64> {
     }
 }
 
+fn parse_record_id_field(value: &Value) -> Result<Vec<u8>> {
+    match value {
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, v) in items.iter().enumerate() {
+                let n = v
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("Invalid record_id[{}]: expected integer byte", i))?;
+                if n > 255 {
+                    return Err(anyhow!("Invalid record_id[{}]: {} out of byte range", i, n));
+                }
+                out.push(n as u8);
+            }
+            Ok(out)
+        }
+        Value::String(s) => {
+            let trimmed = s.trim();
+            let hex_s = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+            hex::decode(hex_s)
+                .map_err(|e| anyhow!("Invalid record_id hex '{}': {}", trimmed, e))
+        }
+        _ => Err(anyhow!(
+            "Invalid record_id type: expected byte array or hex string"
+        )),
+    }
+}
+
 fn decode_hex32(field: &str, hex_str: &str) -> Result<[u8; 32]> {
     let s = hex_str.trim();
     let bytes = hex::decode(s)
@@ -148,7 +264,18 @@ fn decode_hex32(field: &str, hex_str: &str) -> Result<[u8; 32]> {
         .map_err(|_| anyhow!("{} must be 32 bytes (64 hex chars)", field))
 }
 
-fn validate_v2_fields(receipt: &DeletionReceipt, canister_id: Principal) -> Result<()> {
+fn validate_protocol_version(protocol_version: &str) -> Result<()> {
+    match protocol_version {
+        "mktd02-v2" | "mktd02-v3" => Ok(()),
+        other => Err(anyhow!(
+            "Unsupported protocol_version '{}': expected mktd02-v2 or mktd02-v3",
+            other
+        )),
+    }
+}
+
+fn validate_receipt_fields(receipt: &DeletionReceipt, canister_id: Principal) -> Result<()> {
+    validate_protocol_version(&receipt.protocol_version)?;
     // Finalized-style receipts must carry explicit trust metadata.
     if receipt.bls_certificate.is_some() && receipt.trust_root_key_id.trim().is_empty() {
         return Err(anyhow!(
@@ -178,12 +305,12 @@ mod tests {
     use candid::Principal;
     use zombie_core::receipt::ProtocolVersion;
 
-    fn golden_receipt() -> DeletionReceipt {
+    fn golden_receipt_v2() -> DeletionReceipt {
         DeletionReceipt {
             protocol_version: ProtocolVersion::V2.into(),
             receipt_id: [0x1F; 32],
             canister_id: Principal::from_text("aaaaa-aa").unwrap(),
-            subnet_id: Principal::from_text("2vxsx-fae").unwrap(),
+            record_id: Vec::new(),
             pre_state_hash: [0xAA; 32],
             post_state_hash: [0xBB; 32],
             tombstone_hash: [0xCC; 32],
@@ -191,7 +318,26 @@ mod tests {
             certified_commitment: [0xEE; 32],
             module_hash: [0xFF; 32],
             timestamp: 1_000_000,
-            nonce: 1,
+            deletion_seq: 1,
+            bls_certificate: None,
+            trust_root_key_id: String::from("mainnet"),
+        }
+    }
+
+    fn golden_receipt_v3() -> DeletionReceipt {
+        DeletionReceipt {
+            protocol_version: ProtocolVersion::V3.into(),
+            receipt_id: [0x2A; 32],
+            canister_id: Principal::from_text("aaaaa-aa").unwrap(),
+            record_id: vec![0xAA, 0xBB],
+            pre_state_hash: [0xAA; 32],
+            post_state_hash: [0xBB; 32],
+            tombstone_hash: [0xCC; 32],
+            deletion_event_hash: [0xDD; 32],
+            certified_commitment: [0xEE; 32],
+            module_hash: [0xFF; 32],
+            timestamp: 1_000_000,
+            deletion_seq: 1,
             bls_certificate: None,
             trust_root_key_id: String::from("mainnet"),
         }
@@ -202,7 +348,7 @@ mod tests {
     /// field reordering in zombie-core's serialisation layer.
     #[test]
     fn golden_receipt_cbor_round_trip() {
-        let original = golden_receipt();
+        let original = golden_receipt_v3();
 
         // Encode to CBOR
         let mut buf = Vec::new();
@@ -242,7 +388,11 @@ mod tests {
             "module_hash mutated"
         );
         assert_eq!(decoded.timestamp, original.timestamp, "timestamp mutated");
-        assert_eq!(decoded.nonce, original.nonce, "nonce mutated");
+        assert_eq!(
+            decoded.deletion_seq, original.deletion_seq,
+            "deletion_seq mutated"
+        );
+        assert_eq!(decoded.record_id, original.record_id, "record_id mutated");
         assert_eq!(
             decoded.protocol_version, original.protocol_version,
             "protocol_version mutated"
@@ -253,33 +403,30 @@ mod tests {
         );
     }
 
-    /// Protocol version string must be exactly "mktd02-v2" — not an enum
-    /// variant name, not a numeric code. Verifiers parse this string.
     #[test]
-    fn golden_protocol_version_string() {
-        let r = golden_receipt();
-        assert_eq!(
-            r.protocol_version, "mktd02-v2",
-            "protocol_version string changed — verifiers parse this field directly"
-        );
+    fn protocol_version_accepts_v2_and_v3() {
+        validate_protocol_version("mktd02-v2").expect("v2 should be accepted");
+        validate_protocol_version("mktd02-v3").expect("v3 should be accepted");
+        assert!(validate_protocol_version("mktd02-vX").is_err());
     }
 
-    /// receipt_id golden vector — matches zombie-core's own golden test.
-    /// canister = aaaaa-aa (empty bytes), nonce = 1.
+    /// v2 receipt_id golden vector — must remain stable for legacy receipts.
     #[test]
-    fn golden_receipt_id_matches_zombie_core() {
-        use zombie_core::receipt::compute_receipt_id;
+    fn golden_receipt_id_v2_matches_zombie_core() {
+        use zombie_core::receipt::compute_receipt_id_v2;
         let c = Principal::from_text("aaaaa-aa").unwrap();
-        let id = compute_receipt_id(&c, 1);
+        let id = compute_receipt_id_v2(&c, 1);
         assert_eq!(
             hex::encode(id),
             "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b",
             "receipt_id derivation changed — breaks all existing receipts"
         );
     }
+    // NOTE: v3 receipt_id golden test is deferred in fetch.rs until this crate's
+    // pinned zombie-core revision/API contract for v3 helper usage is finalized.
 
     #[test]
-    fn file_receipt_parses_integer_bls_array() {
+    fn file_receipt_v2_parses_integer_bls_array() {
         let path = std::env::temp_dir().join(format!(
             "cvdr_verify_receipt_{}_{}.json",
             std::process::id(),
@@ -309,6 +456,9 @@ mod tests {
 
         assert_eq!(receipt.trust_root_key_id, "mainnet");
         assert_eq!(receipt.bls_certificate, Some(vec![1, 2, 3, 4]));
+        assert_eq!(receipt.protocol_version, "mktd02-v2");
+        assert_eq!(receipt.deletion_seq, 1);
+        assert_eq!(receipt.record_id, Vec::<u8>::new());
     }
 
     #[test]
@@ -343,5 +493,40 @@ mod tests {
             "unexpected error: {}",
             err
         );
+    }
+
+    #[test]
+    fn file_receipt_v3_parses_record_id_and_deletion_seq() {
+        let path = std::env::temp_dir().join(format!(
+            "cvdr_verify_receipt_{}_{}.json",
+            std::process::id(),
+            3
+        ));
+        let json = r#"{
+  "protocol_version": "mktd02-v3",
+  "receipt_id": "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b",
+  "canister_id": "aaaaa-aa",
+  "record_id": [1,2,3,4],
+  "pre_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "post_state_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "tombstone_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "deletion_event_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certified_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "module_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "timestamp": "1000000",
+  "deletion_seq": "7",
+  "bls_certificate": [1,2,3,4],
+  "trust_root_key_id": "mainnet"
+}"#;
+
+        fs::write(&path, json).unwrap();
+        let receipt = load_receipt_from_file(path.to_str().unwrap()).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(receipt.protocol_version, "mktd02-v3");
+        assert_eq!(receipt.deletion_seq, 7);
+        assert_eq!(receipt.record_id, vec![1, 2, 3, 4]);
+        assert_eq!(receipt.bls_certificate, Some(vec![1, 2, 3, 4]));
+        assert_eq!(receipt.trust_root_key_id, "mainnet");
     }
 }
