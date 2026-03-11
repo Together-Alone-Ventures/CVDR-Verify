@@ -1974,6 +1974,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
+ "windows-sys 0.52.0",
  "windows-sys 0.59.0",
 ]
 
@@ -2745,8 +2746,8 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zombie-core"
-version = "0.2.0"
-source = "git+https://github.com/Together-Alone-Ventures/zombie-core?rev=a79ef84#a79ef846fb07177b31c86940431bdc0e2e1f8f96"
+version = "0.3.0"
+source = "git+https://github.com/Together-Alone-Ventures/zombie-core?tag=zombie-core-v0.3.0#76ca607129e4afc9b9508702f891aa59b007786d"
 dependencies = [
  "candid",
  "ciborium",

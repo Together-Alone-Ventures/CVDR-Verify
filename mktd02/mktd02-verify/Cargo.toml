@@ -9,7 +9,7 @@ description = "Standalone V1-V4 verification tool for MKTd02 CVDRs"
 # Switch to tag = "zombie-core-vX.Y.Z" for releases.
 # NAMING CONVENTION: always write "zombie-core vX.Y.Z" when referencing
 # this alongside MKTd02 version strings — never just "v0.x.y".
-zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", rev = "a79ef84" }
+zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", tag = "zombie-core-v0.3.0" }
 ic-agent = "0.39"
 candid = "0.10"
 clap = { version = "4", features = ["derive"] }
