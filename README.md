@@ -22,6 +22,12 @@ Boundary mapping:
 
 For MKTd02, tooling covers V1-V4 verification paths with explicit handling for pending vs finalized receipts.
 
+V1-V4 durability classification:
+- V1: permanent / archival
+- V2: permanent / archival for finalized receipts; pending receipts require live canister access
+- V3: permanent, assuming archived build artifacts and reproducible provenance are available
+- V4: point-in-time only
+
 ## Verification Scope
 
 These tools verify cryptographic/data-consistency properties of receipts and related on-chain evidence.  
@@ -36,7 +42,7 @@ For MKTd02, this reference layer follows an archival-first evidentiary model:
 ## Disclaimer
 
 Reference tooling only. Provided under Apache-2.0 without warranty.  
-Verification outputs support technical assessment but are not legal advice or regulatory certification.
+Verification outputs support technical assessment but do not replace verifier due diligence, and are not legal advice or regulatory certification.
 
 ## Licence
 
