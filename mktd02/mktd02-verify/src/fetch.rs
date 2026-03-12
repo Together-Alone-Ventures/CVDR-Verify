@@ -61,7 +61,7 @@ struct FileReceiptV2 {
     module_hash: String,
     timestamp: Value,
     nonce: Value,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_bytes_field")]
     bls_certificate: Option<Vec<u8>>,
     #[serde(default)]
     trust_root_key_id: Option<String>,
@@ -85,7 +85,7 @@ struct FileReceiptV3 {
     module_hash: String,
     timestamp: Value,
     deletion_seq: Value,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_bytes_field")]
     bls_certificate: Option<Vec<u8>>,
     #[serde(default)]
     trust_root_key_id: Option<String>,
@@ -253,6 +253,47 @@ fn parse_record_id_field(value: &Value) -> Result<Vec<u8>> {
             "Invalid record_id type: expected byte array or hex string"
         )),
     }
+}
+
+fn parse_optional_bytes_field(name: &str, value: &Value) -> Result<Option<Vec<u8>>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, v) in items.iter().enumerate() {
+                let n = v
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("Invalid {}[{}]: expected integer byte", name, i))?;
+                if n > 255 {
+                    return Err(anyhow!("Invalid {}[{}]: {} out of byte range", name, i, n));
+                }
+                out.push(n as u8);
+            }
+            Ok(Some(out))
+        }
+        Value::String(s) => {
+            let trimmed = s.trim();
+            let hex_s = trimmed
+                .strip_prefix("0x")
+                .or_else(|| trimmed.strip_prefix("0X"))
+                .unwrap_or(trimmed);
+            let decoded = hex::decode(hex_s)
+                .map_err(|e| anyhow!("Invalid {} hex '{}': {}", name, trimmed, e))?;
+            Ok(Some(decoded))
+        }
+        _ => Err(anyhow!(
+            "Invalid {} type: expected null, byte array, or hex string",
+            name
+        )),
+    }
+}
+
+fn deserialize_optional_bytes_field<'de, D>(deserializer: D) -> std::result::Result<Option<Vec<u8>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    parse_optional_bytes_field("bls_certificate", &value).map_err(serde::de::Error::custom)
 }
 
 fn decode_hex32(field: &str, hex_str: &str) -> Result<[u8; 32]> {
@@ -527,6 +568,73 @@ mod tests {
         assert_eq!(receipt.deletion_seq, 7);
         assert_eq!(receipt.record_id, vec![1, 2, 3, 4]);
         assert_eq!(receipt.bls_certificate, Some(vec![1, 2, 3, 4]));
+        assert_eq!(receipt.trust_root_key_id, "mainnet");
+    }
+
+    #[test]
+    fn file_receipt_v2_parses_hex_bls_certificate() {
+        let path = std::env::temp_dir().join(format!(
+            "cvdr_verify_receipt_{}_{}.json",
+            std::process::id(),
+            4
+        ));
+        let json = r#"{
+  "protocol_version": "mktd02-v2",
+  "receipt_id": "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b",
+  "canister_id": "aaaaa-aa",
+  "subnet_id": "2vxsx-fae",
+  "pre_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "post_state_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "tombstone_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "deletion_event_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certified_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "module_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "timestamp": "1000000",
+  "nonce": "1",
+  "bls_certificate": "0a0b0c0d",
+  "trust_root_key_id": "mainnet"
+}"#;
+
+        fs::write(&path, json).unwrap();
+        let receipt = load_receipt_from_file(path.to_str().unwrap()).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(receipt.protocol_version, "mktd02-v2");
+        assert_eq!(receipt.bls_certificate, Some(vec![0x0a, 0x0b, 0x0c, 0x0d]));
+        assert_eq!(receipt.trust_root_key_id, "mainnet");
+    }
+
+    #[test]
+    fn file_receipt_v3_parses_hex_bls_certificate() {
+        let path = std::env::temp_dir().join(format!(
+            "cvdr_verify_receipt_{}_{}.json",
+            std::process::id(),
+            5
+        ));
+        let json = r#"{
+  "protocol_version": "mktd02-v3",
+  "receipt_id": "1f213a0f2bf4992071a7f23e72d1942e564a4e871e3decce8ac8ee27d08f534b",
+  "canister_id": "aaaaa-aa",
+  "record_id": [1,2,3,4],
+  "pre_state_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "post_state_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "tombstone_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "deletion_event_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "certified_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "module_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "timestamp": "1000000",
+  "deletion_seq": "7",
+  "bls_certificate": "0x0a0b0c0d",
+  "trust_root_key_id": "mainnet"
+}"#;
+
+        fs::write(&path, json).unwrap();
+        let receipt = load_receipt_from_file(path.to_str().unwrap()).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_eq!(receipt.protocol_version, "mktd02-v3");
+        assert_eq!(receipt.deletion_seq, 7);
+        assert_eq!(receipt.bls_certificate, Some(vec![0x0a, 0x0b, 0x0c, 0x0d]));
         assert_eq!(receipt.trust_root_key_id, "mainnet");
     }
 }
