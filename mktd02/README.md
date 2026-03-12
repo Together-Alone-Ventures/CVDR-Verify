@@ -81,6 +81,37 @@ Checks tombstone persistence at verification time.
 - V3 requires published release/build provenance in addition to receipt data.
 - V4 remains live-dependent.
 
+## Portable JSON Receipt Format
+
+Portable JSON receipt files are verified over decoded field values, not raw JSON text. Key ordering, whitespace, and formatting have no verification meaning.
+
+Canonical portable JSON encoding rules:
+
+- `protocol_version`: string (`mktd02-v2` or `mktd02-v3`)
+- `canister_id`: principal text
+- `timestamp`: JSON string or number accepted by the verifier
+- `receipt_id`, `pre_state_hash`, `post_state_hash`, `tombstone_hash`, `deletion_event_hash`, `certified_commitment`, `module_hash`: lowercase hex strings in canonical exports
+- `record_id`:
+  - v3: lowercase hex string in canonical exports
+  - verifier also accepts legacy byte-array JSON for backward compatibility
+- `bls_certificate`:
+  - finalized receipts: lowercase hex string in canonical exports
+  - pending receipts: absent or null
+  - verifier also accepts legacy byte-array JSON for backward compatibility
+
+Version-specific notes:
+
+- v2 portable receipts carry legacy `subnet_id` and `nonce` fields on wire; `nonce` may be encoded as a JSON string or number
+- v3 portable receipts do not carry receipt-level `subnet_id`
+- v3 portable receipts carry `deletion_seq` on wire; `deletion_seq` may be encoded as a JSON string or number
+- v3 portable receipts require non-empty `record_id`; in MKTd02 Leaf mode this is the deleted subject principal encoded as bytes
+- finalized receipts must carry non-empty `trust_root_key_id` whenever `bls_certificate` is present
+
+Current parser compatibility:
+
+- The verifier accepts canonical hex-string portable JSON.
+- For backward compatibility, the verifier also accepts legacy byte-array JSON for `record_id` and `bls_certificate`.
+
 ## Boundaries
 
 - Canonical protocol/integration semantics: MKTd02 repo
