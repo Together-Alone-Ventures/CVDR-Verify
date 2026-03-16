@@ -39,6 +39,17 @@ For MKTd02, this reference layer follows an archival-first evidentiary model:
 - V3 primary: archival module-hash provenance against published build/release records and reproducible builds.
 - V3 secondary: live on-chain module-hash corroboration when canister infrastructure is still available.
 
+## Two-Tier Verification Model
+V1 and V2 are offline proofs. For finalized receipts, both can be executed from the JSON receipt
+file alone with no network access and no dependency on live infrastructure.
+
+V3 and V4 are liveness checks. V3 requires access to the published GitHub release record and
+optionally a live canister query. V4 requires a live canister query. Neither is available if
+the canister no longer exists; this does not invalidate V1 or V2.
+
+Verifiers should treat V1+V2 as the durable evidentiary core and V3+V4 as corroborating
+point-in-time checks.
+
 ## Disclaimer
 
 Reference tooling only. Provided under Apache-2.0 without warranty.  
