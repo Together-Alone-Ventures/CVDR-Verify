@@ -9,7 +9,12 @@ description = "Standalone V1-V4 verification tool for MKTd02 CVDRs"
 # Switch to tag = "zombie-core-vX.Y.Z" for releases.
 # NAMING CONVENTION: always write "zombie-core vX.Y.Z" when referencing
 # this alongside MKTd02 version strings — never just "v0.x.y".
-zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", tag = "zombie-core-v0.3.0" }
+# NOTE: tag zombie-core-v0.3.1 still carries crate version 0.3.0 (known
+# tag/version quirk). The v0.3.0->v0.3.1 delta is JSON-only (hex-string byte
+# encoding gated on is_human_readable()); receipt struct fields and ALL hash
+# formulas are byte-identical, so verification semantics are unchanged. This
+# aligns the verifier pin with the engine producing current receipts.
+zombie-core = { git = "https://github.com/Together-Alone-Ventures/zombie-core", tag = "zombie-core-v0.3.1" }
 ic-agent = "0.39"
 candid = "0.10"
 clap = { version = "4", features = ["derive"] }

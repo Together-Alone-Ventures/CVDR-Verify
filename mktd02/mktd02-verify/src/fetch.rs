@@ -1,16 +1,96 @@
 use anyhow::{anyhow, Result};
-use candid::{Decode, Encode, Principal};
+use candid::{CandidType, Decode, Encode, Principal};
 use ic_agent::Agent;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
 use zombie_core::receipt::DeletionReceipt;
 
+/// Verifier-local plain mirror of the canister's `mktd_get_receipt` Candid
+/// response (DaffyDefs `MktdReceiptResponse`).
+///
+/// Field-for-field with the deployed `.did`:
+/// ```text
+/// type MktdReceiptResponse = record {
+///   protocol_version : text; receipt_id : text; canister_id : principal;
+///   record_id : blob; pre_state_hash : text; post_state_hash : text;
+///   tombstone_hash : text; deletion_event_hash : text;
+///   certified_commitment : text; module_hash : text; timestamp : nat64;
+///   deletion_seq : nat64; bls_certificate : opt blob; trust_root_key_id : text;
+/// };
+/// ```
+///
+/// ## Why a local mirror instead of decoding into `DeletionReceipt`
+/// `zombie_core::receipt::DeletionReceipt` derives `Deserialize` via
+/// `#[serde(from = "DeletionReceiptWire")]`, and `DeletionReceiptWire` is
+/// `#[serde(untagged)]` (zombie-core `src/receipt.rs:83` and `:174` at the
+/// pinned commit 76ca607). serde's untagged path buffers input through the
+/// private `Content`/`ContentVisitor` types; candid's decoder only supports
+/// that via a hack that recognises serde's private `ContentVisitor`, which the
+/// serde >= 1.0.220 `serde_core` split broke (lock pins serde 1.0.228). The
+/// result was a panic: "Not a valid visitor: ContentVisitor". This mirror has
+/// no untagged/flatten fields, so candid decodes it directly with no buffering.
+///
+/// It also matches the *actual* endpoint shape — the canister returns hashes as
+/// hex `text`, whereas `DeletionReceipt`'s Candid type carries them as `blob`,
+/// so the old direct decode was type-mismatched against the wire regardless.
+#[derive(Debug, Clone, CandidType, Deserialize)]
+struct MktdReceiptResponse {
+    protocol_version: String,
+    receipt_id: String,
+    canister_id: Principal,
+    record_id: Vec<u8>,
+    pre_state_hash: String,
+    post_state_hash: String,
+    tombstone_hash: String,
+    deletion_event_hash: String,
+    certified_commitment: String,
+    module_hash: String,
+    timestamp: u64,
+    deletion_seq: u64,
+    bls_certificate: Option<Vec<u8>>,
+    trust_root_key_id: String,
+}
+
+/// Map the candid wire mirror into zombie-core's `DeletionReceipt`.
+///
+/// This is a pure transport transcode: hex `text` hash fields are decoded to
+/// the same 32-byte arrays the canister hex-encoded, `blob` fields map straight
+/// to `Vec<u8>`, and scalars copy across unchanged. The resulting bytes are
+/// identical to what a direct candid decode would have yielded, so V1-V4 inputs
+/// and every hash/check formula are byte-for-byte unaffected. It mirrors the
+/// existing file-mode transcode (`decode_hex32`) exactly.
+fn mirror_into_receipt(wire: MktdReceiptResponse) -> Result<DeletionReceipt> {
+    Ok(DeletionReceipt {
+        protocol_version: wire.protocol_version,
+        receipt_id: decode_hex32("receipt_id", &wire.receipt_id)?,
+        canister_id: wire.canister_id,
+        record_id: wire.record_id,
+        pre_state_hash: decode_hex32("pre_state_hash", &wire.pre_state_hash)?,
+        post_state_hash: decode_hex32("post_state_hash", &wire.post_state_hash)?,
+        tombstone_hash: decode_hex32("tombstone_hash", &wire.tombstone_hash)?,
+        deletion_event_hash: decode_hex32("deletion_event_hash", &wire.deletion_event_hash)?,
+        certified_commitment: decode_hex32("certified_commitment", &wire.certified_commitment)?,
+        module_hash: decode_hex32("module_hash", &wire.module_hash)?,
+        timestamp: wire.timestamp,
+        deletion_seq: wire.deletion_seq,
+        bls_certificate: wire.bls_certificate,
+        trust_root_key_id: wire.trust_root_key_id,
+    })
+}
+
 /// Fetch a CVDR receipt from the canister by hex-encoded receipt ID.
 ///
-/// The canister returns `Option<DeletionReceipt>` in Candid. This verifier
-/// first attempts optional decode, then falls back to direct decode for
-/// compatibility with endpoint/interface variation.
+/// The canister returns `Option<MktdReceiptResponse>` in Candid (DaffyDefs
+/// `mktd_get_receipt : (text) -> (opt MktdReceiptResponse) query`). This
+/// verifier decodes into the candid-clean local mirror [`MktdReceiptResponse`]
+/// and then transcodes into `DeletionReceipt`. It first attempts the optional
+/// decode, then falls back to a direct (non-optional) decode for compatibility
+/// with endpoint/interface variation.
+///
+/// Decoding into the plain mirror (rather than directly into `DeletionReceipt`)
+/// avoids candid's broken serde-untagged buffering path — see the
+/// [`MktdReceiptResponse`] doc comment for the full root cause.
 ///
 /// ## Trust root key note
 /// Receipts include `trust_root_key_id` used by V2 certificate-path checks.
@@ -29,20 +109,22 @@ pub async fn fetch_receipt(
         .await
         .map_err(|e| anyhow!("Query mktd_get_receipt failed: {}", e))?;
 
-    // Primary: canister returns opt DeletionReceipt
-    if let Ok(Some(receipt)) = Decode!(&response, Option<DeletionReceipt>) {
+    // Primary: canister returns opt MktdReceiptResponse
+    if let Ok(Some(wire)) = Decode!(&response, Option<MktdReceiptResponse>) {
+        let receipt = mirror_into_receipt(wire)?;
         validate_receipt_fields(&receipt, canister_id)?;
         return Ok(receipt);
     }
 
     // Fallback: try direct (non-optional) decode
-    if let Ok(receipt) = Decode!(&response, DeletionReceipt) {
+    if let Ok(wire) = Decode!(&response, MktdReceiptResponse) {
+        let receipt = mirror_into_receipt(wire)?;
         validate_receipt_fields(&receipt, canister_id)?;
         return Ok(receipt);
     }
 
     Err(anyhow!(
-        "Failed to decode receipt from canister {} — check Candid interface compatibility with current zombie-core/MKTd02 receipt types (including bls_certificate/trust_root_key_id fields)",
+        "Failed to decode receipt from canister {} — check Candid interface compatibility with current MKTd02 mktd_get_receipt response (MktdReceiptResponse: text hashes, blob record_id/bls_certificate, opt bls_certificate, trust_root_key_id)",
         canister_id
     ))
 }
