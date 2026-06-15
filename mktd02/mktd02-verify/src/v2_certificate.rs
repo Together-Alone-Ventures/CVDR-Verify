@@ -1,4 +1,5 @@
 use candid::{CandidType, Decode, Encode, Principal};
+use ic_agent::hash_tree::{LookupResult, SubtreeLookupResult};
 use ic_agent::{lookup_value, Agent, Certificate};
 use serde::Deserialize;
 use zombie_core::nns_keys;
@@ -208,20 +209,16 @@ fn verify_archived_certificate_no_freshness(
             verify_signature_with_der_key(&delegated_cert, trust_root_der)
                 .map_err(|e| format!("Delegation certificate signature invalid: {}", e))?;
 
-            // Enforce canister authorization exactly as ic-agent::check_delegation:
-            // lookup subnet/<subnet_id>/canister_ranges and require effective_canister_id in range.
-            let canister_range_lookup = [
-                b"subnet".as_ref(),
+            // Enforce canister authorization. The IC may present the subnet's
+            // canister ranges in EITHER tree layout; accept both, and in both
+            // cases still require effective_canister_id to fall within a range
+            // proven for the delegating subnet under the same delegation
+            // signature (no weakening — see `authorize_canister_ranges`).
+            authorize_canister_ranges(
+                &delegated_cert,
                 delegation.subnet_id.as_ref(),
-                b"canister_ranges".as_ref(),
-            ];
-            let canister_range = lookup_value(&delegated_cert, canister_range_lookup)
-                .map_err(|e| format!("Delegation certificate missing canister_ranges: {}", e))?;
-            let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(canister_range)
-                .map_err(|e| format!("Invalid canister_ranges payload in delegation cert: {}", e))?;
-            if !principal_is_within_ranges(&effective_canister_id, &ranges) {
-                return Err("Certificate delegation is not authorized for this canister".to_string());
-            }
+                &effective_canister_id,
+            )?;
 
             let public_key_path = [
                 b"subnet".as_ref(),
@@ -268,6 +265,111 @@ fn principal_is_within_ranges(principal: &Principal, ranges: &[(Principal, Princ
     ranges
         .iter()
         .any(|(low, high)| principal >= low && principal <= high)
+}
+
+/// Enforce that `effective_canister_id` falls within the canister ranges proven
+/// for the delegating subnet, accepting EITHER tree layout the IC may present:
+///
+///   - **Legacy:**  `/subnet/<subnet_id>/canister_ranges` — a single CBOR
+///     `Vec<(Principal, Principal)>` blob. This is the only layout the pinned
+///     ic-agent 0.39 (and 0.40) `check_delegation` understands.
+///   - **Sharded:** `/canister_ranges/<subnet_id>/<shard_key>` — one CBOR
+///     `Vec<(Principal, Principal)>` blob per shard leaf. This is the newer IC
+///     routing-table layout, not yet handled by the pinned ic-agent, resolved
+///     here via the maintained `lookup_subtree`/`list_paths`/`lookup_path`
+///     primitives (no hand-rolled tree-digest walking).
+///
+/// Authorization semantics are identical across layouts: authorize iff there is
+/// **any authenticated ranges leaf under the target subnet whose signed range
+/// contains the target canister**. A pruned shard carries no leaf and therefore
+/// cannot authorize. The function rejects when (a) neither layout exists, (b) a
+/// present leaf fails to CBOR-decode, (c) a present authenticated leaf is not an
+/// exact three-level shard leaf (`/canister_ranges/<subnet_id>/<shard_key>` —
+/// deeper descendant paths are rejected, never authorized), or (d) no signed
+/// range contains the target. This widens *where* the proof is read, never
+/// *whether* the canister must be proven in range.
+fn authorize_canister_ranges(
+    delegated_cert: &Certificate,
+    subnet_id: &[u8],
+    effective_canister_id: &Principal,
+) -> Result<(), String> {
+    // Legacy single-blob layout: /subnet/<subnet_id>/canister_ranges
+    if let Ok(blob) = lookup_value(
+        delegated_cert,
+        [b"subnet".as_ref(), subnet_id, b"canister_ranges".as_ref()],
+    ) {
+        let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(blob)
+            .map_err(|e| format!("Invalid canister_ranges payload (legacy layout): {}", e))?;
+        return if principal_is_within_ranges(effective_canister_id, &ranges) {
+            Ok(())
+        } else {
+            Err("Certificate delegation is not authorized for this canister (legacy canister_ranges layout)".to_string())
+        };
+    }
+
+    // New sharded layout: /canister_ranges/<subnet_id>/<shard_key> leaves.
+    // Enumerate the authenticated (present, non-pruned) ranges leaves directly
+    // under the target subnet and CBOR-decode EVERY present leaf. Authorize iff
+    // some decoded signed range contains the target — but only after confirming
+    // that NO present leaf failed to decode (G §2.4 (b)) and that every present
+    // leaf is an exact three-level shard leaf (G §2.4 — no deeper descendant may
+    // authorize). We deliberately do NOT return early on a match, so a later
+    // malformed sibling cannot be skipped.
+    if let SubtreeLookupResult::Found(subtree) = delegated_cert
+        .tree
+        .lookup_subtree([b"canister_ranges".as_ref(), subnet_id])
+    {
+        // `list_paths()` returns paths RELATIVE to the subtree root (the
+        // <subnet_id> node — verified against ic-certification 3.1.0
+        // `HashTreeNode::list_paths`, which seeds an empty prefix), so a direct
+        // `<shard_key>` leaf has depth 1. If a real cert ever surfaced a
+        // different convention, the live V1–V4 run regresses V2 to FAIL with the
+        // "expected direct shard leaf" message below — the fix would be to set
+        // this constant to the observed depth, never to drop the check.
+        const SHARDED_LEAF_DEPTH: usize = 1;
+
+        let mut present_shard = false;
+        let mut authorized = false;
+        for path in subtree.list_paths() {
+            present_shard = true;
+            // Fail closed: enforce exact three-level shard depth FIRST, then
+            // require the path to resolve to a Found leaf — any non-Found result
+            // (Absent / Unknown / Error) rejects rather than being silently
+            // skipped (G ratified form).
+            if path.len() != SHARDED_LEAF_DEPTH {
+                return Err(format!(
+                    "Invalid sharded canister_ranges layout: expected direct shard leaf at depth {} under /canister_ranges/<subnet_id>, found authenticated leaf at depth {}",
+                    SHARDED_LEAF_DEPTH,
+                    path.len()
+                ));
+            }
+            let leaf = match subtree.lookup_path(&path) {
+                LookupResult::Found(leaf) => leaf,
+                other => {
+                    return Err(format!(
+                        "Sharded canister_ranges path enumerated by list_paths did not resolve to a Found leaf (lookup result: {:?})",
+                        other
+                    ));
+                }
+            };
+            // Decode every present leaf; a failure here rejects regardless of
+            // whether an earlier leaf already matched.
+            let ranges: Vec<(Principal, Principal)> = serde_cbor::from_slice(leaf)
+                .map_err(|e| format!("Invalid canister_ranges payload (sharded layout): {}", e))?;
+            if principal_is_within_ranges(effective_canister_id, &ranges) {
+                authorized = true;
+            }
+        }
+        if present_shard {
+            return if authorized {
+                Ok(())
+            } else {
+                Err("Certificate delegation is not authorized for this canister (sharded canister_ranges layout)".to_string())
+            };
+        }
+    }
+
+    Err("Delegation certificate missing canister_ranges in both legacy (/subnet/<id>/canister_ranges) and sharded (/canister_ranges/<id>/<shard>) tree layouts".to_string())
 }
 
 fn certificate_timing_notes(cert: &Certificate, receipt_timestamp_ns: u64) -> Vec<String> {
@@ -468,5 +570,215 @@ fn check_certified_data(
             format!("certified_data not found in certificate tree: {:?}", e),
             notes,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ic_agent::hash_tree::{fork, label, leaf, HashTree};
+
+    const SUBNET_ID: &[u8] = &[0xfe, 0x32, 0x0f, 0x2f, 0xbb];
+    // A different subnet — ranges signed under it must NOT authorize a lookup
+    // performed against SUBNET_ID (the delegating subnet).
+    const OTHER_SUBNET_ID: &[u8] = &[0xab, 0xcd, 0xef, 0x01, 0x23];
+    // Range [00000000013000000101 .. 00000000013fffff0101] — the live shard.
+    const RANGE_LOW: &[u8] = &[0, 0, 0, 0, 1, 0x30, 0, 0, 1, 1];
+    const RANGE_HIGH: &[u8] = &[0, 0, 0, 0, 1, 0x3f, 0xff, 0xff, 1, 1];
+    const IN_RANGE: &[u8] = &[0, 0, 0, 0, 1, 0x30, 0x90, 0x42, 1, 1]; // fg23v-... shard member
+    const OUT_OF_RANGE: &[u8] = &[0, 0, 0, 0, 1, 0x40, 0, 0, 1, 1];
+
+    fn ranges_cbor() -> Vec<u8> {
+        let ranges: Vec<(Principal, Principal)> = vec![(
+            Principal::from_slice(RANGE_LOW),
+            Principal::from_slice(RANGE_HIGH),
+        )];
+        serde_cbor::to_vec(&ranges).unwrap()
+    }
+
+    fn cert_with_tree(tree: HashTree<Vec<u8>>) -> Certificate {
+        Certificate {
+            tree,
+            signature: Vec::new(),
+            delegation: None,
+        }
+    }
+
+    /// Legacy layout: /subnet/<subnet_id>/canister_ranges -> single CBOR blob.
+    fn legacy_cert() -> Certificate {
+        cert_with_tree(label(
+            "subnet",
+            label(SUBNET_ID, label("canister_ranges", leaf(ranges_cbor()))),
+        ))
+    }
+
+    /// Sharded layout: /canister_ranges/<subnet_id>/<shard_key> -> CBOR blob.
+    fn sharded_cert() -> Certificate {
+        cert_with_tree(label(
+            "canister_ranges",
+            label(SUBNET_ID, label(RANGE_LOW, leaf(ranges_cbor()))),
+        ))
+    }
+
+    /// Sharded layout, but the shard leaf is not valid CBOR.
+    fn sharded_cert_malformed_leaf() -> Certificate {
+        cert_with_tree(label(
+            "canister_ranges",
+            label(SUBNET_ID, label(RANGE_LOW, leaf(vec![0xff, 0xff, 0xff]))),
+        ))
+    }
+
+    /// Sharded layout whose ranges are signed under a DIFFERENT subnet than the
+    /// one the delegation names — the lookup against SUBNET_ID must miss it.
+    fn sharded_cert_wrong_subnet() -> Certificate {
+        cert_with_tree(label(
+            "canister_ranges",
+            label(OTHER_SUBNET_ID, label(RANGE_LOW, leaf(ranges_cbor()))),
+        ))
+    }
+
+    /// Sharded layout with TWO direct (depth-1) shard leaves: the first valid and
+    /// containing the target, the second malformed CBOR. The fork children must
+    /// be in sorted label order, so RANGE_LOW (valid) precedes RANGE_HIGH
+    /// (malformed). Decode-all must reject for the malformed sibling rather than
+    /// passing early on the first containing leaf.
+    fn sharded_cert_valid_then_malformed() -> Certificate {
+        cert_with_tree(label(
+            "canister_ranges",
+            label(
+                SUBNET_ID,
+                fork(
+                    label(RANGE_LOW, leaf(ranges_cbor())),
+                    label(RANGE_HIGH, leaf(vec![0xff, 0xff, 0xff])),
+                ),
+            ),
+        ))
+    }
+
+    /// Sharded layout with a DEEPER descendant leaf at
+    /// /canister_ranges/<subnet_id>/<shard_key>/extra (relative depth 2). The
+    /// leaf is valid CBOR and contains the target, but the depth violation must
+    /// reject before any authorization.
+    fn sharded_cert_deeper_path() -> Certificate {
+        cert_with_tree(label(
+            "canister_ranges",
+            label(
+                SUBNET_ID,
+                label(RANGE_LOW, label("extra", leaf(ranges_cbor()))),
+            ),
+        ))
+    }
+
+    #[test]
+    fn legacy_layout_authorizes_in_range() {
+        authorize_canister_ranges(&legacy_cert(), SUBNET_ID, &Principal::from_slice(IN_RANGE))
+            .expect("in-range canister must be authorized via legacy layout");
+    }
+
+    #[test]
+    fn sharded_layout_authorizes_in_range() {
+        authorize_canister_ranges(&sharded_cert(), SUBNET_ID, &Principal::from_slice(IN_RANGE))
+            .expect("in-range canister must be authorized via sharded layout");
+    }
+
+    #[test]
+    fn sharded_layout_rejects_out_of_range() {
+        let err = authorize_canister_ranges(
+            &sharded_cert(),
+            SUBNET_ID,
+            &Principal::from_slice(OUT_OF_RANGE),
+        )
+        .unwrap_err();
+        assert!(err.contains("not authorized"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn legacy_layout_rejects_out_of_range() {
+        let err = authorize_canister_ranges(
+            &legacy_cert(),
+            SUBNET_ID,
+            &Principal::from_slice(OUT_OF_RANGE),
+        )
+        .unwrap_err();
+        assert!(err.contains("not authorized"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn rejects_when_ranges_absent_from_both_layouts() {
+        let cert = cert_with_tree(label("time", leaf(vec![1, 2, 3])));
+        let err =
+            authorize_canister_ranges(&cert, SUBNET_ID, &Principal::from_slice(IN_RANGE)).unwrap_err();
+        assert!(
+            err.contains("missing canister_ranges in both"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sharded_layout_rejects_malformed_cbor_leaf() {
+        // A present (authenticated) shard leaf that fails to CBOR-decode must
+        // reject, not silently skip — per G ruling §2.4 condition (b).
+        let err = authorize_canister_ranges(
+            &sharded_cert_malformed_leaf(),
+            SUBNET_ID,
+            &Principal::from_slice(IN_RANGE),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("Invalid canister_ranges payload (sharded layout)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_when_ranges_signed_under_wrong_subnet() {
+        // Ranges proven for OTHER_SUBNET_ID must not authorize a canister whose
+        // delegation names SUBNET_ID — even though the canister is within those
+        // ranges. The lookup is scoped to the delegating subnet's path.
+        let err = authorize_canister_ranges(
+            &sharded_cert_wrong_subnet(),
+            SUBNET_ID,
+            &Principal::from_slice(IN_RANGE),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("missing canister_ranges in both"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sharded_layout_rejects_when_a_later_leaf_is_malformed() {
+        // A valid containing leaf must NOT short-circuit past a later malformed
+        // present leaf — decode-all rejects (CD Finding 1). The IN_RANGE target
+        // lies within the first (valid) leaf, so an early-return implementation
+        // would wrongly PASS; this must fail on the malformed sibling instead.
+        let err = authorize_canister_ranges(
+            &sharded_cert_valid_then_malformed(),
+            SUBNET_ID,
+            &Principal::from_slice(IN_RANGE),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("Invalid canister_ranges payload (sharded layout)"),
+            "must reject for the malformed sibling's decode failure, got: {err}"
+        );
+    }
+
+    #[test]
+    fn sharded_layout_rejects_deeper_descendant_path() {
+        // A leaf one level too deep (/.../<shard_key>/extra) must reject for the
+        // depth violation specifically (CD Finding 2), even though its CBOR is
+        // valid and contains the target.
+        let err = authorize_canister_ranges(
+            &sharded_cert_deeper_path(),
+            SUBNET_ID,
+            &Principal::from_slice(IN_RANGE),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("expected direct shard leaf"),
+            "must reject for the depth violation, got: {err}"
+        );
     }
 }
